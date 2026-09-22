@@ -13,7 +13,7 @@ electronics on a running motorcycle.
 | MCU | **ESP32-S3-DevKitC-1 (N16R8)** | Dual core, WiFi, TWAI/CAN, 16MB flash, 8MB PSRAM, native USB. 3.3V logic, **not 5V tolerant**. See ADR-0012. |
 | IMU | GY-521 breakout (MPU-6050) | Count and placement still open — see [DECISIONS.md](DECISIONS.md#open-questions). |
 | Storage | microSD breakout, 3.3V native, SPI | See trap #2. Card: 8–32GB, FAT32, name-brand. |
-| GPS | u-blox NEO-M8N (or NEO-6M) | M8N does 10Hz; the 6M is 1–5Hz and cheaper. Phase 4. |
+| GPS | **Drone-style u-blox M10 module** (Holybro M10 / Beitian class) | Antenna integrated and potted — built for vibration. 10 Hz, UBX capable. See ADR-0013. |
 | Power | 12V→5V buck converter, automotive rated | Plus protection — see trap #3. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
 
@@ -45,6 +45,7 @@ change one, change the other.
 | GPIO14 | SD CS | |
 | GPIO16 | GPS RX (ESP32 ← GPS TX) | UART1 |
 | GPIO15 | GPS TX (ESP32 → GPS RX) | UART1 |
+| GPIO21 | GPS PPS | 1 pulse/second timing reference — interrupt input (ADR-0013) |
 | GPIO48 | Status LED | Onboard addressable RGB on the DevKitC-1 |
 | GPIO47 | Offload button | Input, pull-up, debounced. The onboard BOOT button on GPIO0 is a fallback. |
 | GPIO41 | *reserved* CAN TX | TWAI is remappable; these are convention |
@@ -78,6 +79,42 @@ The MPU-6050's I2C address is set by the `AD0` pin: low = `0x68`, high = `0x69`.
 So two sensors share one bus with no extra hardware. A third needs either the
 ESP32's second I2C peripheral or a TCA9548A multiplexer. Worth knowing while
 the sensor-count question is still open.
+
+## GPS configuration
+
+The module must be configured once and the settings **saved to battery-backed
+RAM**, or every power cycle resets it. On a logger that power-cycles at every
+stop, that is not a minor annoyance.
+
+| Setting | Default | Use | Why |
+|---|---|---|---|
+| Protocol | NMEA | **UBX `NAV-PVT`** | One binary message carries speed, heading, fix status *and* `sAcc`. See below. |
+| Baud | 9600 | **115200** | 9600 cannot carry 10 Hz. Silently drops messages if left alone. |
+| Update rate | 1 Hz | **10 Hz** | Matches the design; 1 Hz makes the speed input uselessly stale |
+| Backup power | — | **battery/supercap fitted** | Retains ephemeris: time-to-first-fix drops from ~30 s to ~1 s |
+
+### Why UBX rather than NMEA
+
+NMEA gives speed (`VTG`, `RMC`) but no statement of how good it is. UBX
+`NAV-PVT` includes **`sAcc`, a per-fix speed accuracy estimate**, which is
+exactly what ADR-0011's gating needs — the receiver reporting its own
+confidence beats inferring it from satellite count and HDOP. It is also more
+compact, and one message replaces parsing several sentences.
+
+### PPS
+
+The module's 1-pulse-per-second output is accurate to roughly 30 ns. Wired to
+an interrupt pin, it pins down *when* a fix was actually valid rather than when
+its bytes finished arriving over UART — which is the hard half of the latency
+problem in Q6. One GPIO, and it can be ignored until Phase 4.
+
+### Antenna placement
+
+The antenna needs sky. Under a plastic fairing or tailpiece is fine; under
+metal or carbon is not. This constrains where the enclosure goes as much as
+the IMU mounting does, and the two requirements can conflict — the IMU wants
+rigid frame mounting, the GPS wants an unobstructed view upward. Separating the
+GPS module from the main enclosure on a cable is the usual resolution.
 
 ## Sensor configuration
 

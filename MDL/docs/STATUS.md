@@ -21,7 +21,8 @@ datasheets and reasoning — **nothing has been measured on hardware.**
 Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
 - **ESP32-S3-DevKitC-1 (N16R8)** — settled, ADR-0012
-- GY-521 over I2C, microSD over SPI, GPS over UART
+- GY-521 over I2C, microSD over SPI
+- **Drone-style u-blox M10 GPS**, read as UBX `NAV-PVT` at 10 Hz + PPS — ADR-0013
 - Log to SD during the ride, offload over a WiFi AP when parked
 - PlatformIO with the Arduino framework
 - Source → bus → sink architecture, sampler and writer on separate cores
@@ -79,6 +80,18 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 — GPS settled (ADR-0013)
+Chose a potted drone-style u-blox M10 module: antenna integrated and built for
+vibration, which no bare breakout is. All M8/M9/M10 parts hit the ~0.05 m/s
+velocity accuracy ADR-0010 assumes, so pricier options buy position quality
+this project does not need. Two design changes came out of it: **UBX `NAV-PVT`
+instead of NMEA**, because it carries `sAcc` — the receiver's own speed
+accuracy estimate — which replaces inferring fix quality from sats/HDOP in
+ADR-0011's gating; and **PPS wired to an interrupt**, which establishes when a
+fix was valid rather than when its bytes arrived (bears on Q6). Verify the
+module is genuine via `UBX-MON-VER` on arrival — counterfeits are common.
+Note the mounting conflict: IMU wants rigid frame, antenna wants sky.
 
 ### 2026-09-22 — Board settled: ESP32-S3-DevKitC-1 N16R8 (ADR-0012, closes Q4)
 Dual core + WiFi + TWAI narrowed the field to the original ESP32 and the S3.

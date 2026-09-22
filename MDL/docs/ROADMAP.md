@@ -78,13 +78,16 @@ Phase 4 has to beat.
 
 ## Phase 4 — Position, time, and GPS-aided lean
 
-- [ ] `GpsSource`: NMEA parsing on UART2
+- [ ] Verify the module is genuine u-blox via `UBX-MON-VER` on arrival
+- [ ] Configure and **persist**: UBX protocol, 115200 baud, 10 Hz, PPS enabled
+- [ ] `GpsSource`: UBX `NAV-PVT` parsing on UART1
 - [ ] Carry-forward with `gage` staleness per [DATA-FORMAT.md](DATA-FORMAT.md)
 - [ ] Wall-clock time into `meta.json` at first fix
 - [ ] Sanity-check position against a known route
 - [ ] **Centripetal correction:** feed speed into fusion, `a − (ω × v)` (ADR-0010)
 - [ ] Mode switching with hysteresis: GPS-aided ↔ low-speed ↔ IMU-only, logged in `fmode`
 - [ ] Settle ADR-0007 by comparing filters on the *same recorded session*
+- [ ] PPS interrupt to timestamp when each fix was *valid* (bears on Q6)
 - [ ] Measure whether GPS latency biases the estimate under hard braking (Q6)
 
 **Done when:** a session carries a track matching the road ridden, and lean

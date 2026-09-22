@@ -43,14 +43,15 @@ it is greppable, and a half-written file is still usable (ADR-0006).
 | `kwhl` | ratio | Current wheel scale-factor estimate. A diagnostic: drift here means tire wear, pressure change, or a bad gate. |
 | `crs` | ° | Course over ground, 0–360. Meaningless at a standstill. |
 | `sats` | count | Satellites used |
+| `sacc` | m/s | UBX `sAcc` — the receiver's own speed accuracy estimate. Drives ADR-0011 gating. |
 | `gage` | ms | Age of the GPS fix at this row. `0` means this row carries a fresh fix. |
 
 Example:
 
 ```csv
-t_ms,ax,ay,az,gx,gy,gz,roll,pitch,fmode,temp,fix,lat,lon,vgps,vwhl,vfus,vsrc,kwhl,crs,sats,gage
-12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.71,22.43,3,0.9448,178.2,9,40
-12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.75,22.47,3,0.9448,178.2,9,50
+t_ms,ax,ay,az,gx,gy,gz,roll,pitch,fmode,temp,fix,lat,lon,vgps,vwhl,vfus,vsrc,kwhl,crs,sats,sacc,gage
+12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.71,22.43,3,0.9448,178.2,9,0.042,40
+12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.75,22.47,3,0.9448,178.2,9,0.042,50
 ```
 
 ### Why `fmode` exists, and why `roll` is not the whole story
@@ -128,7 +129,7 @@ Any tool reading these files must:
 
 ## Size
 
-About 135 bytes per row at 100 Hz ≈ 14 KB/s ≈ **49 MB per riding hour**. A 32GB
+About 141 bytes per row at 100 Hz ≈ 14 KB/s ≈ **49 MB per riding hour**. A 32GB
 card holds hundreds of hours. Storage is not a constraint; write *throughput*
 during a stall is the thing to watch.
 

@@ -277,7 +277,7 @@ Adaptation runs only when all hold. Otherwise `k` is frozen and simply used.
 
 | Condition | Threshold (provisional) | Reason |
 |---|---|---|
-| GPS fix quality | sats ≥ 6, HDOP low | A bad fix teaches the wrong scale |
+| GPS fix quality | **`sAcc` below threshold** (UBX `NAV-PVT`) | The receiver's own speed-accuracy estimate — better than inferring from sats/HDOP. ADR-0013. |
 | Speed | > 5 m/s | GPS speed is noisy near standstill |
 | Lean | \|θ\| < 10° | Avoids the lean/rolling-radius coupling |
 | Longitudinal accel | small | Drive slip and braking slip both corrupt wheel speed |
@@ -383,6 +383,53 @@ decide later (defers a decision that the buffering argument already settles).
 
 **Wrong if:** the SD stall test in Phase 2 shows modest buffers suffice and
 PSRAM goes unused, at which point the original ESP32 becomes the cheaper equal.
+
+---
+
+## ADR-0013: GPS — drone-style u-blox M10 module, read over UBX
+
+**Status:** Accepted (2026-09-22)
+
+A potted drone-type GNSS module (Holybro M10 / Beitian class) with integrated
+antenna, read as **UBX `NAV-PVT`** at 10 Hz, with PPS wired to an interrupt.
+
+**Why this module class:** it is the only option already built for the
+environment. Antenna, receiver and shielding are potted into one vibration-
+tolerant unit, because quadcopters shake too. A bare breakout means sourcing an
+antenna, a ground plane and weatherproofing separately, and hand-assembled RF
+on a motorcycle is a poor bet. All u-blox M8/M9/M10 parts spec **~0.05 m/s
+velocity accuracy**, which is the figure ADR-0010 already assumes — so the
+expensive options buy position quality this project does not need.
+
+**Rejected:** NEO-6M class (1–5 Hz, GPS-only, saturated with counterfeits),
+SparkFun/Adafruit MAX-M10S breakout (genuine and well documented, but leaves
+antenna and mounting as an exercise), NEO-M9N (25 Hz and superb multipath
+rejection, for a 10 Hz requirement).
+
+**Known risk:** chipset provenance on cheap modules is variable and counterfeit
+u-blox parts are common. Verify on arrival by querying `UBX-MON-VER` and
+confirming the reported chip matches what was sold.
+
+### UBX instead of NMEA
+
+NMEA reports speed but never says how good it is. UBX `NAV-PVT` carries
+position, velocity, heading, fix status and **`sAcc` — a per-fix speed accuracy
+estimate — in one binary message.** ADR-0011's gating was going to infer fix
+quality from satellite count and HDOP; `sAcc` is the receiver stating its own
+confidence directly, which is strictly better and simpler. ADR-0011's gating
+table is updated accordingly.
+
+### PPS
+
+The 1 Hz timing pulse is accurate to ~30 ns. On an interrupt pin it establishes
+when a fix was *valid*, as distinct from when its bytes arrived over UART —
+the hard half of Q6. Costs one GPIO. Ignorable until Phase 4, wired now because
+adding a wire to a potted enclosure later is worse.
+
+**Consequence:** the GPS module likely lives outside the main enclosure, on a
+cable. The IMU wants rigid frame mounting; the antenna wants sky. Those two
+requirements conflict, and separating them is the usual resolution — this feeds
+into Q1's mounting plan.
 
 ---
 

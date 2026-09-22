@@ -139,7 +139,7 @@ firmware/
     ├── sources/
     │   ├── Source.h        interface: begin(), read(Sample&), name()
     │   ├── ImuSource.cpp   GY-521 over I2C
-    │   └── GpsSource.cpp   NMEA over UART
+    │   └── GpsSource.cpp   UBX NAV-PVT over UART + PPS interrupt (ADR-0013)
     ├── sinks/
     │   ├── Sink.h          interface: begin(), write(const Sample&), flush()
     │   ├── SdSink.cpp      buffered session writer
