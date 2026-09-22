@@ -348,6 +348,11 @@ their needs.
 second I2C peripheral or a TCA9548A multiplexer), wiring and enclosure design,
 record width in the log schema, and whether the sample rate must rise.
 
+**Also blocks the axis and sign conventions** (2026-09-22). Mounting position
+and orientation determine the conventions, and mounting cannot be planned until
+the count and purpose are known. The two are settled together, and Phase 1
+cannot complete without them — see [HARDWARE.md](HARDWARE.md#axis-and-sign-conventions).
+
 **How the design stays open:** the source interface is written for N sensors
 rather than one, and the CSV schema is versioned so columns can be added.
 

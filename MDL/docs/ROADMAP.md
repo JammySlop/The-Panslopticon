@@ -14,11 +14,14 @@ noted at Phase 7.
 - [x] Decide storage strategy, toolchain, and primary goals
 - [x] Write the document system (`README`, `CLAUDE.md`, `docs/`)
 - [x] Record initial architecture and decisions
-- [ ] Settle axis and sign conventions
-- [ ] Open the first PR
+- [x] Open the first PR
 
 **Done when:** a stranger can read `MDL/` and understand the project, the
 decisions, and what is unresolved.
+
+Axis and sign conventions are *deliberately* not part of this phase — they are
+deferred with Q1, since mounting decides them. They block the end of Phase 1,
+not the start of it.
 
 ---
 

@@ -86,11 +86,22 @@ anything the bike does.
 
 ## Axis and sign conventions
 
-<!-- TODO(human): define the axis and sign conventions for this project -->
+**Not yet defined — deferred as part of Q1** (how many IMUs, where, and for
+what). Mounting position and orientation decide the conventions, and mounting
+cannot be planned until the sensor count and purpose are settled. Answering Q1
+resolves this at the same time.
 
-Everything downstream depends on this being written down once and obeyed:
-the orientation filter, the log column meanings, the desktop plots, and
-anyone reading a chart six months from now.
+Everything downstream depends on it being written down once and obeyed: the
+orientation filter, the sign of the `ω × v` centripetal correction, the log
+column meanings, the desktop plots, and anyone reading a chart six months from
+now. **Phase 1 cannot be finished without it** — verifying that tilting the
+board moves the numbers correctly presumes a definition of "correctly".
+
+When settled, define here: which vehicle direction each of +X, +Y, +Z points;
+whether a left lean is positive or negative (vehicle-dynamics and aviation
+conventions disagree — pick one and name it); whether positive pitch is nose-up
+or nose-down; and the intended physical mounting orientation that makes the
+mapping real.
 
 ## Traps
 

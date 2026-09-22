@@ -33,11 +33,12 @@ Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
 ## Next actions
 
-1. **Settle axis and sign conventions** — the `TODO(human)` in
-   [HARDWARE.md](HARDWARE.md#axis-and-sign-conventions). Blocks Phase 1, since
-   the orientation code and column meanings depend on it.
-2. Open the Phase 0 PR against `main`.
-3. Start Phase 1: `platformio.ini`, `config.h`, I2C bring-up, `WHO_AM_I` check.
+1. Open the Phase 0 PR against `main`.
+2. Start Phase 1: `platformio.ini`, `config.h`, I2C bring-up, `WHO_AM_I` check.
+   The early bring-up work does not need axis conventions; finishing Phase 1
+   does.
+3. **Owner decision — Q1:** how many IMUs, where, and for what. This now also
+   carries the axis and sign conventions, since mounting decides them.
 
 ## Open questions
 
@@ -45,7 +46,7 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 | | Question | Blocks |
 |---|---|---|
-| Q1 | How many IMUs and where? Deferred by the owner. | Wiring, schema width, sample rate |
+| Q1 | How many IMUs, where, and for what? Deferred by the owner. | Wiring, schema width, sample rate, **axis conventions, end of Phase 1** |
 | Q2 | What ends a session? | Phase 2 |
 | Q3 | Is a power-loss flush achievable? | Phase 6 |
 | Q4 | Which ESP32 board variant? | Pin table |
@@ -78,6 +79,12 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 — Axis conventions folded into Q1
+Owner deferred the axis and sign conventions until the IMU count and purpose
+are settled, since mounting decides them. Removed the standalone `TODO(human)`;
+the requirement now lives under Q1 and in HARDWARE.md with a note on what to
+define when it is answered. Phase 1 can start without it but cannot finish.
 
 ### 2026-09-22 — Speed fusion designed (ADR-0011)
 Owner asked to plan GPS + CAN wheel-speed fusion. Speed became a dedicated
