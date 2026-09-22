@@ -485,10 +485,9 @@ and does not depend on someone else's circuit having headroom. The cost is that
 permanent power cannot be left unmanaged.
 
 **Why it cannot be left unmanaged:** at ~100 mA drawn from 12 V against the
-fitted 8.6 Ah YTZ10S, the bike is **unlikely to crank after about 43 hours
+bike's OEM 8.6 Ah YTZ10S, the bike is **unlikely to crank after about 43 hours
 parked** and flat after ~86. That is not a corner case, it is an ordinary
-weekend. (On the stock 6 Ah YTZ7S it would be ~30 hours — see
-[BIKE.md](BIKE.md).)
+weekend. See [BIKE.md](BIKE.md).
 
 **The ignition-sense line resolves both.** One thin wire from a switched
 accessory circuit, divided to 3.3 V, does two jobs:
@@ -532,53 +531,56 @@ drain.
 
 ---
 
-## ADR-0016: Front-wheel Hall sensor replaces the CAN wheel-speed path
+## ADR-0016: Wheel-speed source after CAN was ruled out
 
-**Status:** Accepted (2026-09-22) — supersedes the wheel-speed source in
-ADR-0011; ADR-0009 (CAN) is retired for this vehicle
+**Status:** **Deferred (2026-09-22)** — not decided. Options recorded; the
+choice is the owner's and has not been made.
 
-The target bike is a **2006 Honda CBR600RR (PC37)**, which **has no CAN bus**
-(see [BIKE.md](BIKE.md)). Wheel speed will instead come from a Hall-effect
-sensor and magnets fitted to the **front** wheel.
+The target bike has **no CAN bus** ([BIKE.md](BIKE.md)), which retires
+ADR-0009's CAN path and ADR-0011's original wheel-speed source. What replaces
+it — if anything — is open.
 
-**ADR-0011's fusion math is unaffected.** It was written against a speed
-scalar, deliberately agnostic about its source. Only the source changes.
+**ADR-0011's fusion math is unaffected either way.** It was written against a
+speed scalar, deliberately agnostic about its source. Only the source is in
+question, and GPS alone already satisfies the primary goals.
 
-**Why this is better than the CAN plan would have been, not merely a fallback:**
+### Options on the table
 
-1. **The front wheel is undriven.** It cannot spin up under power, which
-   removes drive slip — the largest error source ADR-0011 spends machinery
-   detecting. A CAN tap on this class of bike would have carried
-   countershaft speed: behind the clutch, ahead of final drive, corrupted by
-   rear slip *and* dependent on sprocket choice.
-2. **Nothing of the bike's wiring is touched.** No splicing into a loom that
-   carries engine management.
-3. **Slightly lower lean bias:** +5.7% at 45° on the 120/70-17 front against
-   +6.4% on the 180/55-17 rear (BIKE.md).
-4. **A few dollars and no protocol reverse engineering.**
+**A — Fit a Hall-effect sensor to the front wheel.**
+Magnets on a rotor bolt circle, sensor bracketed to the fork.
+*For:* the front wheel is undriven, so it cannot spin up under power — removing
+drive slip, the largest error source ADR-0011 spends machinery detecting.
+Touches none of the bike's wiring. Slightly lower lean bias than the rear
+(+5.7% vs +6.4% at 45°). A few dollars, no protocol work.
+*Against:* the least mechanically robust part of the build — sensor and magnets
+live in road grime, spray and stone strike beside a brake disc. The front wheel
+locks under braking and leaves the ground under acceleration, neither
+hypothetical on this bike. Requires fabricating a bracket and drilling or
+clamping near brake hardware.
 
-**Costs and residual failure modes:**
+**B — Tap the existing speedometer sensor.**
+*For:* already fitted, already weatherproofed, no new mechanical parts.
+*Against:* it reads countershaft speed — behind the clutch, ahead of final
+drive — so it is corrupted by rear wheel slip and changes meaning with
+sprockets. Requires splicing into existing wiring. Signal type unverified.
 
-- The front wheel **locks under heavy braking** and **leaves the ground under
-  acceleration**. Both make it lie, and both are detectable by cross-checking
-  against the IMU exactly as ADR-0011 already specifies. A front-only feed is
-  worthless during a wheelie — which on this bike is not hypothetical.
-- Pulse count per revolution sets the low-speed resolution floor. More magnets
-  gives better resolution and more chance of one departing at speed. Balance
-  during Phase 9.
-- Mechanical: the sensor and magnets live in road grime, spray and stone
-  strike, close to the brake disc. This is the least robust part of the whole
-  build.
+**C — GPS speed only; no wheel source at all.**
+*For:* simplest possible build, nothing added to the bike, and it already meets
+the project's stated goals.
+*Against:* accepts dropouts under cover, 50–200 ms latency under braking, and
+10 Hz rather than something faster.
 
-**This resolves Q8** (front, not rear — and by fitting rather than tapping) and
-**closes Q7** (no CAN on this vehicle).
+**D — K-line from the DLC.**
+Effectively ruled out *for speed*: 10.4 kbaud request/response gives 5–10 Hz
+with latency, no better than GPS. Remains attractive for **engine** data
+(RPM, throttle, coolant) as a separate, unrelated path.
 
-**K-line is kept as an optional, separate path** for *engine* data only — RPM,
-throttle position, coolant temperature — at 5–10 Hz. Useful, unrelated to
-speed, and deferred.
+### What would settle it
 
-**Wrong if:** the project moves to a bike that does expose clean wheel speed on
-CAN, at which point ADR-0011's original source returns unchanged.
+Whether the added mechanical risk and fabrication buy enough over GPS-only to
+be worth it — which is partly a question about how much riding happens where
+GPS drops out, and partly about appetite for bracketry near the front brake.
+**Q8 tracks this.**
 
 ---
 
@@ -647,11 +649,18 @@ on a real session first. Phase 4.
 **Answered: no.** The 2006 CBR600RR has no CAN bus — only a 4-pin K-line DLC.
 See [BIKE.md](BIKE.md) and ADR-0016.
 
-### ~~Q8 — Front wheel, rear wheel, or both?~~ CLOSED
+### Q8 — Where does wheel speed come from, if anywhere?
 
-**Answered: front, by fitting a Hall sensor rather than tapping anything.**
-Resolved by ADR-0016, which also removes the "what does the bus expose"
-dependency that made this open in the first place.
+**Reopened 2026-09-22 — deliberately deferred by the owner.** CAN is ruled out
+(Q7), but the replacement is undecided. Four options with their trade-offs are
+laid out in ADR-0016: a fitted front-wheel Hall sensor, tapping the existing
+speedometer sensor, GPS-only, or K-line.
+
+**Blocks:** Phase 9 in its entirety. Blocks nothing before it — GPS-only is a
+complete path through Phase 8, so this can stay open a long time.
+
+**Do not assume an answer in code.** ADR-0011's fusion already treats speed as
+a scalar from an unspecified source, which is what keeps this open at no cost.
 
 ### Q9 — Compensate rolling radius for lean angle?
 

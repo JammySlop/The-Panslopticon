@@ -37,27 +37,18 @@ too slow and too laggy to serve as a speed source.
 
 ### Battery
 
-**YTZ10S, 12 V, 8.6 Ah, ~190 CCA** *(fitted to this bike — confirmed by the
-owner)*. The stock part for the PC37 is the smaller YTZ7S (6 Ah); the YTZ10S is
-a capacity upgrade.
+**YTZ10S, 12 V, 8.6 Ah, ~190 CCA — OEM for this bike** *(confirmed by the
+owner)*.
 
 Drain arithmetic at the logger's ~100 mA from 12 V:
 
-| | YTZ7S (stock, 6 Ah) | **YTZ10S (fitted, 8.6 Ah)** |
+| | Hours | |
 |---|---|---|
-| To ~50% — likely won't crank | ~30 h | **~43 h (~1.8 days)** |
-| To flat | ~60 h | ~86 h (~3.6 days) |
+| To ~50% — likely won't crank | **~43 h** | ~1.8 days |
+| To flat | ~86 h | ~3.6 days |
 
-Better than stock, and **still under two days before the bike won't start.**
-The conclusion is unchanged: ADR-0015's ignition-sense line is required, not a
-refinement.
-
-The extra ~60 CCA also means slightly less voltage sag while cranking, which
-marginally eases the 6–8 V brownout case — but not enough to design around.
-
-**Physical note:** the YTZ10S is larger than the YTZ7S it replaces. Confirm
-what space remains around the battery box before counting it as a mounting
-location.
+**Under two days parked before the bike won't start.** ADR-0015's
+ignition-sense line is required, not a refinement.
 
 ### No wheel speed sensors
 
@@ -66,7 +57,7 @@ gearbox/countershaft sensor — which reads *driven* speed, behind the clutch an
 before final drive, and is therefore corrupted by rear wheel slip and dependent
 on sprocket choice.
 
-Fitting an independent front-wheel sensor is both easier and better. ADR-0016.
+**How (or whether) to get wheel speed on this bike is undecided — see Q8.**
 
 ## Thermal — the under-seat exhaust
 
@@ -120,5 +111,6 @@ they were chosen. Suspension and vibration analysis remain optional (Q1).
 - [ ] Speedometer sensor type and location, from the service manual
 - [ ] A switched accessory circuit suitable for the ignition-sense tap
       (**not** ABS, ECU, or ignition-critical wiring — ADR-0015)
-- [ ] Front rotor bolt pattern and caliper clearance for the Hall sensor
+- [ ] Front rotor bolt pattern and caliper clearance — *only if Q8 lands on a
+      fitted wheel sensor*
 - [ ] Physical space at each candidate mounting location

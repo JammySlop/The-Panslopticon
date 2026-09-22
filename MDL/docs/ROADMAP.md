@@ -159,32 +159,29 @@ CAN has outgrown this list and has its own phase below.
 
 ---
 
-## Phase 9 — Front wheel speed and speed fusion
+## Phase 9 — Wheel speed and speed fusion (optional)
 
-Designed in ADR-0011, sourced per ADR-0016. The CAN path is retired: the 2006
-CBR600RR has no bus ([BIKE.md](BIKE.md)). Wheel speed comes from a Hall sensor
-fitted to the front wheel instead.
+Designed in ADR-0011. **Gated on Q8, which is open** — the CAN path is retired
+(the bike has no bus) and no replacement has been chosen. GPS-only is a
+complete path through Phase 8, so this phase may never be built.
 
-*Mechanical — the least robust part of the build*
-- [ ] Magnets on a front rotor bolt circle; Hall sensor bracketed to the fork
-- [ ] Choose pulses per revolution: resolution at low speed against the chance
-      of a magnet departing at speed
-- [ ] Survive grime, spray and stone strike next to a brake disc
+*Prerequisite*
+- [ ] **Settle Q8:** fitted front-wheel Hall sensor, a tap on the existing
+      speedometer sensor, or no wheel source at all. See ADR-0016.
 
-*Firmware*
-- [ ] `WheelSource`: interrupt-driven pulse counting to speed
+*Firmware — source-agnostic once Q8 is answered*
+- [ ] `WheelSource` producing speed from whatever Q8 selects
 - [ ] Online scale-factor estimator for `k`, logged as `kwhl`
 - [ ] Gating state machine — `sAcc`, speed, lean, longitudinal accel
 - [ ] Latency compensation via a ring buffer of past estimates
 - [ ] Degradation ladder with `vsrc` logged per row
-- [ ] Front-wheel-specific detection: **lock-up under braking** and **lift under
-      acceleration**, both by cross-check against the IMU. Neither is
-      hypothetical on this bike.
+- [ ] Slip and lift detection by cross-check against the IMU. Which failure
+      modes matter depends on which wheel Q8 lands on.
 
 *Validation*
 - [ ] Confirm `k` converges and then stays put over a ride
 - [ ] Confirm tunnel or tree-cover transitions are seamless in `vfus`
-- [ ] Measure the front tyre's crown arc and settle Q9
+- [ ] Measure the relevant tyre's crown arc and settle Q9
 
 **Done when:** speed is continuous through GPS dropouts, `k` is stable, and the
 lean estimate measurably improves under braking — on a recorded session, not

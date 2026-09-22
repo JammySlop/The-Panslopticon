@@ -63,7 +63,7 @@ an input:
  GPS ──┼─▶│ speed fusion  │── v_fused ──┐
        │  │  (ADR-0011)   │             │
  Wheel─┼─▶│               │             ▼
- (Hall)│  └───────────────┘   ┌──────────────────┐
+ (Q8)  │  └───────────────┘   ┌──────────────────┐
        │         │            │ orientation      │──▶ roll, pitch ──▶ bus
        └─────────┼───────────▶│ fusion (ADR-0010)│
                  │            └──────────────────┘
@@ -71,9 +71,10 @@ an input:
  GPS ────────────────────────────────── position channels ──────────▶ bus
 ```
 
-**Stage 1 — speed fusion** reconciles GPS Doppler speed with front-wheel speed
-into one best estimate. (The wheel source is a fitted Hall sensor, not CAN —
-the target bike has no bus. ADR-0016; the fusion is agnostic either way.) **Stage 2 — orientation fusion** consumes that estimate
+**Stage 1 — speed fusion** reconciles GPS Doppler speed with a wheel-speed
+source into one best estimate. (**The wheel source is undecided — Q8.** The
+target bike has no CAN bus, and the fusion is agnostic about where the scalar
+comes from, which is what lets the question stay open at no cost.) **Stage 2 — orientation fusion** consumes that estimate
 to remove centripetal acceleration from the accelerometer. Stage 2 does not
 care where speed came from, which is what lets CAN be added later without
 touching it.

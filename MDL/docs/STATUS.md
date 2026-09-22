@@ -37,7 +37,7 @@ Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
 - **Battery feed, ignition-sensed, fused at the terminal** - ADR-0015
 
-- **Front-wheel Hall sensor** for wheel speed; no CAN on this bike - ADR-0016
+- No CAN bus on this bike; **wheel-speed source undecided (Q8)** - ADR-0016
 
 ## Next actions
 
@@ -60,7 +60,7 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 | Q5 | How much does tire width offset the lean estimate? | Analysis accuracy |
 | Q6 | Does GPS speed latency need compensating? | Phase 4 |
 | ~~Q7~~ | ~~CAN wheel speed?~~ **Closed — no CAN on this bike** | — |
-| ~~Q8~~ | ~~Front, rear or both?~~ **Closed — front, fitted not tapped** | — |
+| Q8 | Wheel-speed source, if any? **Deferred by the owner** | Phase 9 only |
 | Q9 | Compensate rolling radius for lean? | Speed accuracy while leaned |
 
 ## Known risks
@@ -75,8 +75,6 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 - **The under-seat exhaust is where electronics would naturally go.** Heat
   constrains mounting and capacitor choice; undertail temperatures are
   unmeasured.
-- **The front wheel locks under braking and lifts under acceleration**, both
-  making wheel speed briefly false. Detectable against the IMU, unimplemented.
 - **Wheel speed is biased by lean angle** — roughly 6% high at 45°, because the
   tire rolls on its shoulder. A systematic error correlated with the very
   quantity being measured. Mitigated by gating, unvalidated.
@@ -92,15 +90,22 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 Newest first. One or two lines each: what changed, and what the next session
 should know.
 
-### 2026-09-22 - Target bike recorded: 2006 CBR600RR (ADR-0016, closes Q7/Q8)
+### 2026-09-22 - Corrections: battery is OEM, wheel-speed source reopened
+Two fixes from the owner. The YTZ10S is **OEM** for this bike, not an upgrade
+over a YTZ7S - drain figures (~43 h to no-crank) are unchanged, the framing
+was wrong. And the front-wheel Hall sensor was **never agreed**: a skipped
+question was misread as approval. ADR-0016 is now `Deferred` with four options
+recorded rather than a decision, Q8 is reopened, and the pin table, BOM,
+roadmap and architecture no longer assume a Hall sensor. Phase 9 is gated on
+Q8 and may never be built - GPS-only is a complete path through Phase 8.
+
+### 2026-09-22 - Target bike recorded: 2006 CBR600RR (ADR-0016, closes Q7)
 Added [BIKE.md](BIKE.md) for vehicle-specific facts, kept separate so the
 logger design stays portable. Three findings changed decisions:
 **(1) No CAN bus** — the PC37 has a 4-pin K-line DLC only. Closes Q7 as a no
-and retires ADR-0009's CAN path. Replaced with a fitted front-wheel Hall
-sensor, which is better than the CAN plan would have been: the front wheel is
-undriven, so it cannot spin up under power, removing the drive slip ADR-0011
-spends effort detecting. Closes Q8 too. ADR-0011's fusion math is untouched —
-it was written against a speed scalar, agnostic about source.
+and retires ADR-0009's CAN path. ADR-0011's fusion math is untouched — it was
+written against a speed scalar, agnostic about source — so what replaces CAN,
+if anything, stays open as Q8.
 **(2) Battery is a 6Ah YTZ7S**, not the 8-12Ah assumed — ~30 hours parked
 before it will not crank, which strengthens ADR-0015's ignition-sense line.
 **(3) Under-seat exhaust with a catalytic converter.** The obvious mounting
