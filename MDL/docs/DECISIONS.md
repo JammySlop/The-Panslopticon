@@ -530,6 +530,56 @@ drain.
 
 ---
 
+## ADR-0016: Front-wheel Hall sensor replaces the CAN wheel-speed path
+
+**Status:** Accepted (2026-09-22) — supersedes the wheel-speed source in
+ADR-0011; ADR-0009 (CAN) is retired for this vehicle
+
+The target bike is a **2006 Honda CBR600RR (PC37)**, which **has no CAN bus**
+(see [BIKE.md](BIKE.md)). Wheel speed will instead come from a Hall-effect
+sensor and magnets fitted to the **front** wheel.
+
+**ADR-0011's fusion math is unaffected.** It was written against a speed
+scalar, deliberately agnostic about its source. Only the source changes.
+
+**Why this is better than the CAN plan would have been, not merely a fallback:**
+
+1. **The front wheel is undriven.** It cannot spin up under power, which
+   removes drive slip — the largest error source ADR-0011 spends machinery
+   detecting. A CAN tap on this class of bike would have carried
+   countershaft speed: behind the clutch, ahead of final drive, corrupted by
+   rear slip *and* dependent on sprocket choice.
+2. **Nothing of the bike's wiring is touched.** No splicing into a loom that
+   carries engine management.
+3. **Slightly lower lean bias:** +5.7% at 45° on the 120/70-17 front against
+   +6.4% on the 180/55-17 rear (BIKE.md).
+4. **A few dollars and no protocol reverse engineering.**
+
+**Costs and residual failure modes:**
+
+- The front wheel **locks under heavy braking** and **leaves the ground under
+  acceleration**. Both make it lie, and both are detectable by cross-checking
+  against the IMU exactly as ADR-0011 already specifies. A front-only feed is
+  worthless during a wheelie — which on this bike is not hypothetical.
+- Pulse count per revolution sets the low-speed resolution floor. More magnets
+  gives better resolution and more chance of one departing at speed. Balance
+  during Phase 9.
+- Mechanical: the sensor and magnets live in road grime, spray and stone
+  strike, close to the brake disc. This is the least robust part of the whole
+  build.
+
+**This resolves Q8** (front, not rear — and by fitting rather than tapping) and
+**closes Q7** (no CAN on this vehicle).
+
+**K-line is kept as an optional, separate path** for *engine* data only — RPM,
+throttle position, coolant temperature — at 5–10 Hz. Useful, unrelated to
+speed, and deferred.
+
+**Wrong if:** the project moves to a bike that does expose clean wheel speed on
+CAN, at which point ADR-0011's original source returns unchanged.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -590,31 +640,25 @@ correction. It may be worth propagating speed forward using logged longitudinal
 acceleration between fixes. Do not build this speculatively — measure the error
 on a real session first. Phase 4.
 
-### Q7 — Does the bike expose usable wheel speed on CAN?
+### ~~Q7 — Does the bike expose usable wheel speed on CAN?~~ CLOSED
 
-**Gates all of ADR-0011.** Unknown and unverified. Needs answering in this
-order: which model and year; whether it has a CAN bus at all (pre-CAN bikes
-simply do not); where it can be tapped non-destructively (a diagnostic
-connector is far preferable to splicing); whether wheel speed appears on it;
-whether that value is raw or carries the speedometer's legally-mandated
-optimistic bias. Many markets require a speedo to never under-read, so dash
-speed typically runs high — whether the CAN value shares that bias must be
-measured against GPS, not assumed.
+**Answered: no.** The 2006 CBR600RR has no CAN bus — only a 4-pin K-line DLC.
+See [BIKE.md](BIKE.md) and ADR-0016.
 
-Until answered, treat CAN wheel speed as a design target, not a plan.
+### ~~Q8 — Front wheel, rear wheel, or both?~~ CLOSED
 
-### Q8 — Front wheel, rear wheel, or both?
-
-Front is the better ground-speed reference — it is undriven, so it does not
-spin up under power — but it locks under braking and reads zero during a
-wheelie. Rear is corrupted by drive slip but stays on the ground more. Both
-together make slip directly observable by divergence, which is the cheapest
-detector available. Depends on what the bus actually exposes (Q7).
+**Answered: front, by fitting a Hall sensor rather than tapping anything.**
+Resolved by ADR-0016, which also removes the "what does the bus expose"
+dependency that made this open in the first place.
 
 ### Q9 — Compensate rolling radius for lean angle?
 
-Wheel speed reads roughly 6% high at 45° of lean because the tire rolls on its
-shoulder. Gating adaptation to near-upright conditions avoids *learning* the
-wrong scale, but the fused speed is still biased while leaned. Compensating
-`r_eff` with the live lean estimate would correct it, at the cost of coupling
-two estimates that are currently independent. Needs real data to justify.
+Wheel speed reads high while leaned because the tyre rolls on its shoulder. For
+the CBR600RR's stock 120/70-17 front that is **+5.7% at 45°** (BIKE.md).
+Gating adaptation to near-upright conditions avoids *learning* the wrong scale,
+but fused speed is still biased while leaned. Compensating `r_eff` with the
+live lean estimate would correct it, at the cost of coupling two estimates that
+are currently independent.
+
+The `r_c` figure behind that number is estimated from tyre profile, not
+measured. Measure the actual front tyre crown arc before deciding.

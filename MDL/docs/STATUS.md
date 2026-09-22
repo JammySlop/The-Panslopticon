@@ -9,6 +9,7 @@ you need to resume is here. Update it every session — see
 **Phase:** 0 — Planning and documentation
 **Last updated:** 2026-09-22
 **Branch:** `mdl/planning-docs`
+**Target bike:** 2006 Honda CBR600RR (PC37) — see [BIKE.md](BIKE.md)
 **Hardware built:** none
 **Firmware written:** none
 
@@ -36,6 +37,8 @@ Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
 - **Battery feed, ignition-sensed, fused at the terminal** - ADR-0015
 
+- **Front-wheel Hall sensor** for wheel speed; no CAN on this bike - ADR-0016
+
 ## Next actions
 
 1. Open the Phase 0 PR against `main`.
@@ -56,8 +59,8 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 | Q3 | Is a power-loss flush achievable? | Phase 6 |
 | Q5 | How much does tire width offset the lean estimate? | Analysis accuracy |
 | Q6 | Does GPS speed latency need compensating? | Phase 4 |
-| Q7 | Does the bike expose usable wheel speed on CAN? | **All of Phase 9** |
-| Q8 | Front wheel, rear wheel, or both? | Slip detection design |
+| ~~Q7~~ | ~~CAN wheel speed?~~ **Closed — no CAN on this bike** | — |
+| ~~Q8~~ | ~~Front, rear or both?~~ **Closed — front, fitted not tapped** | — |
 | Q9 | Compensate rolling radius for lean? | Speed accuracy while leaned |
 
 ## Known risks
@@ -69,6 +72,11 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 - **Lean falls back to IMU-only during GPS dropouts**, where it drifts. The
   `fmode` column records when this happened so the data stays honest, but the
   drift rate itself is unmeasured.
+- **The under-seat exhaust is where electronics would naturally go.** Heat
+  constrains mounting and capacitor choice; undertail temperatures are
+  unmeasured.
+- **The front wheel locks under braking and lifts under acceleration**, both
+  making wheel speed briefly false. Detectable against the IMU, unimplemented.
 - **Wheel speed is biased by lean angle** — roughly 6% high at 45°, because the
   tire rolls on its shoulder. A systematic error correlated with the very
   quantity being measured. Mitigated by gating, unvalidated.
@@ -83,6 +91,22 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 - Target bike recorded: 2006 CBR600RR (ADR-0016, closes Q7/Q8)
+Added [BIKE.md](BIKE.md) for vehicle-specific facts, kept separate so the
+logger design stays portable. Three findings changed decisions:
+**(1) No CAN bus** — the PC37 has a 4-pin K-line DLC only. Closes Q7 as a no
+and retires ADR-0009's CAN path. Replaced with a fitted front-wheel Hall
+sensor, which is better than the CAN plan would have been: the front wheel is
+undriven, so it cannot spin up under power, removing the drive slip ADR-0011
+spends effort detecting. Closes Q8 too. ADR-0011's fusion math is untouched —
+it was written against a speed scalar, agnostic about source.
+**(2) Battery is a 6Ah YTZ7S**, not the 8-12Ah assumed — ~30 hours parked
+before it will not crank, which strengthens ADR-0015's ignition-sense line.
+**(3) Under-seat exhaust with a catalytic converter.** The obvious mounting
+location is the hottest part of the bike; capacitors now need 105C rating and
+mounting candidates are listed in BIKE.md for Q1 to choose from.
+K-line kept as optional Phase 10 for engine data only.
 
 ### 2026-09-22 - Power settled (ADR-0015)
 Owner chose a direct battery feed, which forced the parasitic-drain question:

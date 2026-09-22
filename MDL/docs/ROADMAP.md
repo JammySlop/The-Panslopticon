@@ -159,35 +159,45 @@ CAN has outgrown this list and has its own phase below.
 
 ---
 
-## Phase 9 — CAN wheel speed and speed fusion
+## Phase 9 — Front wheel speed and speed fusion
 
-Designed in ADR-0011, built here. **Entirely gated on Q7** — whether the bike
-exposes usable wheel speed on a readable bus. Answer that before any of the
-rest, because a negative answer ends the phase.
+Designed in ADR-0011, sourced per ADR-0016. The CAN path is retired: the 2006
+CBR600RR has no bus ([BIKE.md](BIKE.md)). Wheel speed comes from a Hall sensor
+fitted to the front wheel instead.
 
-*Reconnaissance*
-- [ ] Identify the bike, confirm it has CAN, find a non-destructive tap point
-- [ ] SN65HVD230 (or TJA1051T/3) transceiver on the reserved TWAI pins
-- [ ] Passive sniff: log raw frames to the card, ride, then analyze offline
-- [ ] Identify the wheel-speed message ID, byte layout, scaling and endianness
-- [ ] Determine whether the value carries the speedo's optimistic bias —
-      measure against GPS, do not assume
-- [ ] Settle Q8: is front, rear, or both available?
+*Mechanical — the least robust part of the build*
+- [ ] Magnets on a front rotor bolt circle; Hall sensor bracketed to the fork
+- [ ] Choose pulses per revolution: resolution at low speed against the chance
+      of a magnet departing at speed
+- [ ] Survive grime, spray and stone strike next to a brake disc
 
-*Fusion*
-- [ ] `CanSource` decoding wheel speed into the sample bus
+*Firmware*
+- [ ] `WheelSource`: interrupt-driven pulse counting to speed
 - [ ] Online scale-factor estimator for `k`, logged as `kwhl`
-- [ ] Gating state machine — fix quality, speed, lean, accel, ABS/TC
+- [ ] Gating state machine — `sAcc`, speed, lean, longitudinal accel
 - [ ] Latency compensation via a ring buffer of past estimates
 - [ ] Degradation ladder with `vsrc` logged per row
-- [ ] Slip, lock-up and wheelie detection by cross-checking against the IMU
+- [ ] Front-wheel-specific detection: **lock-up under braking** and **lift under
+      acceleration**, both by cross-check against the IMU. Neither is
+      hypothetical on this bike.
 
 *Validation*
 - [ ] Confirm `k` converges and then stays put over a ride
 - [ ] Confirm tunnel or tree-cover transitions are seamless in `vfus`
-- [ ] Compare lean angle from GPS-only against fused speed on the same session
-- [ ] Decide Q9: is lean-angle rolling-radius compensation worth the coupling?
+- [ ] Measure the front tyre's crown arc and settle Q9
 
-**Done when:** speed is continuous and accurate through GPS dropouts, `k` is
-stable, and the lean estimate measurably improves under braking — verified
-against a recorded session, not impressions.
+**Done when:** speed is continuous through GPS dropouts, `k` is stable, and the
+lean estimate measurably improves under braking — on a recorded session, not
+impressions.
+
+---
+
+## Phase 10 — K-line engine data (optional)
+
+Independent of everything else. The DLC carries RPM, throttle position and
+coolant temperature at 5–10 Hz. Community-reverse-engineered (pgmfi.org,
+RaceChrono). Useful, unrelated to the primary goals, unscheduled.
+
+- [ ] K-line transceiver on the reserved pin
+- [ ] Honda diagnostic request/response implementation
+- [ ] `KLineSource` for RPM, TPS, coolant temp

@@ -29,6 +29,7 @@ this order. Each file is short and has one job.
 | 1 | [docs/STATUS.md](docs/STATUS.md) | What is done, what is in progress, what to do next. **Always current.** |
 | 2 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the firmware is structured and why. |
 | 3 | [docs/HARDWARE.md](docs/HARDWARE.md) | Parts, wiring, pin assignments, electrical hazards. |
+| 3b | [docs/BIKE.md](docs/BIKE.md) | The 2006 CBR600RR specifically — what the vehicle constrains. |
 | 4 | [docs/DATA-FORMAT.md](docs/DATA-FORMAT.md) | What a session on the SD card looks like. |
 | 5 | [docs/ROADMAP.md](docs/ROADMAP.md) | The phased build plan and what counts as "done" per phase. |
 | 6 | [docs/DECISIONS.md](docs/DECISIONS.md) | Every design decision, its rationale, and the questions still open. |

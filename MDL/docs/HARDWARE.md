@@ -16,20 +16,22 @@ electronics on a running motorcycle.
 | Card | **Samsung PRO Endurance 32GB**, FAT32 | High-endurance class is the real decision — see below. |
 | GPS | **Drone-style u-blox M10 module** (Holybro M10 / Beitian class) | Antenna integrated and potted — built for vibration. 10 Hz, UBX capable. See ADR-0013. |
 | Power | 12V→5V buck, 2A, >=40V input rating | Pololu D24V22F5 / Recom R-78E / TPS54360-based. ADR-0015. |
-| Power protection | 2A fuse, P-MOSFET, TVS, 1000-2200uF | See the Power section - the fuse is not optional. |
+| Power protection | 2A fuse, P-MOSFET, TVS, 1000-2200uF **105C rated** | See the Power section. The fuse is not optional; the temperature rating is not either, given the exhaust. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
+
+| Wheel speed | Hall-effect sensor + magnets, front wheel | ADR-0016. The target bike has no CAN and no ABS sensors. |
 
 Future, not yet specified: brake pressure transducer, clutch switch tap,
 display.
 
-**CAN transceiver** (SN65HVD230 or TJA1051T/3) has a concrete purpose now —
-wheel speed for the speed estimate (ADR-0011), not just eventual engine data.
-The ESP32's TWAI controller does the protocol work, so the transceiver is the
-only part needed. Choose a **3.3V** part: the SN65HVD230 runs natively at 3.3V,
-while many common CAN breakouts are 5V and reintroduce trap #1. Tap the bus at
-a diagnostic connector where possible rather than splicing into harness wiring
-— a motorcycle's CAN bus carries braking and engine management, and a bad
-splice there is a safety issue, not just a data one.
+**The target vehicle is a 2006 Honda CBR600RR** — see [BIKE.md](BIKE.md) for
+what that constrains. Most importantly: no CAN bus, a 6Ah battery, and an
+under-seat exhaust where you would otherwise mount things.
+
+**No CAN transceiver is needed.** The 2006 CBR600RR has no CAN bus (BIKE.md),
+so wheel speed comes from a fitted front-wheel Hall sensor instead (ADR-0016).
+Should the project ever move to a CAN-equipped bike, use a **3.3V** part such
+as the SN65HVD230 — many common CAN breakouts are 5V and reintroduce trap #1.
 
 ## Pin budget
 
@@ -50,8 +52,8 @@ change one, change the other.
 | GPIO21 | GPS PPS | 1 pulse/second timing reference — interrupt input (ADR-0013) |
 | GPIO48 | Status LED | Onboard addressable RGB on the DevKitC-1 |
 | GPIO47 | Offload button | Input, pull-up, debounced. The onboard BOOT button on GPIO0 is a fallback. |
-| GPIO41 | *reserved* CAN TX | TWAI is remappable; these are convention |
-| GPIO42 | *reserved* CAN RX | |
+| GPIO41 | **Front wheel Hall sensor** | Pulse input, interrupt-driven (ADR-0016) |
+| GPIO42 | *reserved* K-line (engine data, optional) | Needs a K-line transceiver; deferred |
 | GPIO40 | *reserved* clutch switch | Digital in, pull-up |
 | GPIO4 | *reserved* brake pressure | **ADC1** |
 | GPIO5 | Supply voltage sense | ADC1, via divider - power-loss detection and low-voltage cutoff |
