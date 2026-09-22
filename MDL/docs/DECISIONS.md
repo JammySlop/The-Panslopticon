@@ -139,6 +139,13 @@ real data, then compare against Madgwick on the *same logged session* — which
 is possible precisely because raw `ax…gz` are logged alongside the fused
 output. Decide with recorded data, not on the bench.
 
+**Update (2026-09-22):** ADR-0010 changes the terms of this decision. With
+centripetal correction applied, the accelerometer becomes a valid gravity
+reference mid-corner, so the filter no longer has to be detuned to compensate
+for a reference it cannot trust. Any of the three candidates becomes viable on
+corrected input. Choose on ordinary merits — tunability and debuggability —
+rather than on which one copes best with a broken reference.
+
 ---
 
 ## ADR-0008: Session directories numbered, not timestamped
@@ -167,6 +174,71 @@ Pins reserved, source interface shaped to accept it, no implementation.
 one transceiver chip. But reading a specific motorcycle's bus means identifying
 its message IDs and scaling factors, which is reverse engineering with its own
 timeline and is not a prerequisite for lean angle or braking data.
+
+---
+
+## ADR-0010: GPS speed aids the orientation estimate (centripetal correction)
+
+**Status:** Accepted (2026-09-22)
+
+GPS is promoted from a logged channel to an **input of the orientation filter**.
+Speed is used to remove centripetal acceleration from the accelerometer before
+fusion, restoring it as a valid gravity reference.
+
+**The problem it solves:** a frame-mounted accelerometer cannot observe
+steady-state lean, because the bike leans until the resultant of gravity and
+cornering force points through the contact patches. Without a fix for this,
+lean angle rests entirely on integrating the gyro, and gyro integration drifts
+without bound. The project's primary goal would degrade over the course of a
+ride with nothing to arrest it.
+
+**The mechanism:**
+
+```
+a_gravity = a_measured − (ω × v_body)
+```
+
+With velocity approximately forward in the body frame, `v_body ≈ (v, 0, 0)`, so
+`ω × v = (0, r·v, −q·v)`. The correction therefore **requires only the speed
+scalar — no attitude term.** There is no circular dependency, which is what
+makes this cheap rather than delicate. Worked through for a steady coordinated
+turn, the corrected components recover the true lean angle exactly.
+
+The equivalent closed form is `tan(lean) = v·ψ̇/g`. The subtraction form is
+preferred because it remains valid during transients, not only in steady state.
+
+**Why GPS speed specifically:** receivers derive speed from carrier Doppler
+shift, not by differencing positions, giving roughly 0.05 m/s accuracy. GPS
+speed can be trusted well past the point where GPS *position* can be.
+
+**Limits, and why they are tolerable:**
+
+| Condition | Effect | Why it is survivable |
+|---|---|---|
+| < ~3 m/s | Correction negligible, GPS speed noisy | Centripetal force is near zero there, so the raw accelerometer is already correct |
+| GPS dropout | No speed available | Degrade to IMU-only and flag the mode in the log |
+| 50–200 ms latency | Lags fast transients | The gyro owns transients; GPS corrects only slow drift |
+
+The failure regimes of the two sensors are complementary — the accelerometer is
+reliable exactly where GPS is not, and vice versa. That is what makes this a
+solution rather than a mitigation.
+
+**Known residual error:** this produces the force-vector angle. Actual chassis
+lean is several degrees greater, because the contact patch migrates toward the
+inside of the tire as it rolls onto its shoulder — an effect that grows with
+lean and depends on tire profile. Not corrected in firmware. Log the estimate
+and its inputs; resolve the offset empirically in analysis.
+
+**Cost:** GPS moves from a nice-to-have in Phase 4 to a dependency of good lean
+data, and fusion gains a mode flag plus a degradation path. Accepted, because
+the alternative is a primary goal that drifts.
+
+**Better alternative, later:** wheel speed over CAN — higher rate, no dropouts,
+no latency. The correction is agnostic about where `v` comes from, so this is a
+drop-in upgrade and is now the strongest reason to pursue CAN (ADR-0009).
+
+**Credit:** raised by the repo owner, asking whether GPS could address gyro
+drift. It can, and more directly than by correcting the drift itself.
 
 ---
 
@@ -209,3 +281,19 @@ an empirical question about a specific converter. Untested and unverified.
 A plain WROOM devkit is assumed. An S3 has more RAM and native USB; a board
 with a battery connector changes the power design. Cheap to settle later, but
 it does affect the pin table.
+
+### Q5 — How much does tire width offset the lean estimate?
+
+ADR-0010 yields the force-vector angle; true chassis lean is greater by a few
+degrees, growing with lean angle and dependent on tire profile. Whether to
+correct it, and with what, is an empirical question needing real rides and a
+reference measurement. Until then, logged lean is understood to be the force
+angle and is labeled as such.
+
+### Q6 — Does GPS speed latency need explicit compensation?
+
+The fix is 50–200 ms old when used. At a steady speed that is harmless; under
+hard braking, speed is changing fast enough that a stale value biases the
+correction. It may be worth propagating speed forward using logged longitudinal
+acceleration between fixes. Do not build this speculatively — measure the error
+on a real session first. Phase 4.

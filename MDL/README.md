@@ -8,6 +8,12 @@ The point is to answer questions about how the bike is actually ridden: how far
 it leans, how hard it accelerates and brakes, and where on a lap or a road that
 happened.
 
+GPS does double duty here. Besides position, its speed reading is what makes
+lean angle measurable at all — a frame-mounted accelerometer cannot see
+steady-state lean on a motorcycle, and speed is what lets the cornering force
+be subtracted back out (see
+[ADR-0010](docs/DECISIONS.md#adr-0010-gps-speed-aids-the-orientation-estimate-centripetal-correction)).
+
 **Status:** Phase 0 — planning. No firmware written yet. See
 [docs/STATUS.md](docs/STATUS.md) for exactly where things stand.
 

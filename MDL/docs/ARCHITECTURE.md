@@ -47,6 +47,26 @@ exists. Adding the display, the clutch switch, the brake pressure sensor, or
 CAN means writing one new source or sink — not touching the logging path
 (ADR-0002).
 
+**One deliberate exception:** orientation fusion sits between the sources and
+the bus, and it consumes *two* sources — the IMU and GPS speed — because lean
+angle on a motorcycle is not computable from the IMU alone. See "Centripetal
+correction" below. This is the only place where two sources are coupled, and it
+is coupled through a single scalar (speed), not a general dependency.
+
+```
+ IMU ──┬──────────────────────────────▶ (raw channels straight to the bus)
+       │
+       └──▶ ┌─────────────────┐
+            │ orientation     │──▶ roll, pitch ──▶ bus
+ GPS ──speed▶│ fusion          │
+       │    └─────────────────┘
+       └──────────────────────────────▶ (position channels to the bus)
+```
+
+Raw accelerometer and gyro values are always logged alongside the fused output,
+so a different filter can be evaluated later against an already-recorded ride
+rather than needing a new one.
+
 ## Tasks and cores
 
 The ESP32 has two cores. FreeRTOS is already running underneath Arduino, so we
@@ -111,7 +131,7 @@ firmware/
     │   ├── SdSink.cpp      buffered session writer
     │   └── SerialSink.cpp  live debug output
     ├── fusion/
-    │   └── Orientation.cpp accel+gyro → roll/pitch
+    │   └── Orientation.cpp accel+gyro+GPS speed → roll/pitch (ADR-0010)
     └── service/
         ├── WifiOffload.cpp AP + web server
         └── Status.cpp      LED patterns, error reporting
@@ -145,11 +165,67 @@ There is a second complication specific to motorcycles: in a steady corner, a
 bike leans until the *combined* gravity and cornering force points straight
 through the tires. An accelerometer bolted to the frame therefore reads close
 to "upright" mid-corner, no matter how far over the bike is. The accelerometer
-cannot see steady-state lean at all — the gyro integration carries it, and the
-filter must be tuned to trust the accelerometer *less* than a typical
-self-balancing-robot example does. This is the single most important thing to
-get right for the primary goal, and it is why the stock Kalman example cannot
-simply be ported and trusted. See ADR-0007.
+cannot see steady-state lean at all — so a filter tuned like a
+self-balancing-robot example will report a bike that barely leans. This is the
+single most important thing to get right for the primary goal, and it is why
+the stock Kalman example cannot simply be ported and trusted.
+
+**GPS solves this, and is the reason GPS is not merely a logged channel.**
+See ADR-0010; the short version follows.
+
+### Centripetal correction
+
+The accelerometer is not broken mid-corner — it is measuring exactly what it
+should. It reports *specific force*, which mid-corner is gravity plus
+centripetal acceleration. If the centripetal part can be computed and removed,
+what remains is gravity, and gravity is a valid vertical reference again:
+
+```
+a_gravity = a_measured − (ω × v_body)
+```
+
+`ω` is the gyro, already sampled at 100 Hz. `v_body` is velocity in the body
+frame — approximately `(v, 0, 0)`, forward. So the cross product reduces to:
+
+```
+ω × v = (0, r·v, −q·v)          where ω = (p, q, r)
+```
+
+which **needs only the speed scalar `v` — no attitude at all.** That matters:
+there is no circular dependency where the lean estimate is required to compute
+its own correction. Feed in speed, get back a usable gravity vector, run an
+ordinary complementary or Kalman filter on it.
+
+Speed comes from GPS, which derives it from carrier Doppler shift rather than
+by differencing positions — accurate to roughly 0.05 m/s, and far better than
+the receiver's position quality would suggest.
+
+Equivalently, in a steady coordinated turn, `tan(lean) = v·ψ̇/g`. Both
+formulations agree; the correction above is preferred because it also behaves
+during transients, not just in steady state.
+
+### Where this breaks, and what covers it
+
+| Condition | Effect | Fallback |
+|---|---|---|
+| Speed below ~3 m/s | Correction is negligible and GPS speed is noisy | Raw accelerometer is trustworthy here — centripetal force is near zero |
+| GPS dropout (tunnel, tree cover) | No speed | IMU-only; **flag it in the log**, never degrade silently |
+| GPS latency (50–200 ms) | Correction lags fast transients | The gyro owns transients regardless; GPS only corrects slow drift |
+
+The two sensors fail in opposite regimes, which is what makes the pairing work
+rather than merely help.
+
+**Tire width caveat:** this yields the *force-vector* angle. A real chassis
+leans several degrees further, because the contact patch migrates toward the
+inside of the tire as it rolls onto the shoulder. Log both the estimate and its
+inputs and resolve the offset empirically — it depends on the specific tire.
+
+**Consequence for the architecture:** GPS is an *input to fusion*, not only a
+sink-bound channel. Speed must reach the orientation filter inside the sampler
+path. Fusion degrades gracefully when it is absent and records which mode it
+was in. A wheel-speed source over CAN would be strictly better — higher rate,
+no dropouts, no latency — and is the strongest argument for adding CAN later
+(ADR-0009).
 
 ## Power loss
 

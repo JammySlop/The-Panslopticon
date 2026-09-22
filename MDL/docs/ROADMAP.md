@@ -53,29 +53,39 @@ loses only a bounded tail, and the timing test proves the decoupling works.
 
 ---
 
-## Phase 3 — Make the angles mean something
+## Phase 3 — Orientation, IMU-only baseline
+
+> **Order note (ADR-0010):** GPS speed is an *input* to good lean angle, not a
+> later luxury. This phase deliberately builds the IMU-only version first — it
+> is the fallback path that has to exist anyway for dropouts and low speed, and
+> having it makes the improvement from GPS aiding measurable rather than
+> assumed. Lean angle is **not** finished at the end of this phase.
 
 - [ ] Calibration routine: gyro zero-rate offset, accel bias, stored in `calib.json`
 - [ ] Orientation filter behind an interface so implementations are swappable
-- [ ] Settle ADR-0007 by comparing filters on the *same recorded session*
-- [ ] Validate against a known reference (protractor, phone, anything measurable)
+- [ ] Fusion emits `fmode` from the start, even with only mode `0` implemented
+- [ ] Validate static tilt against a known reference (protractor, phone, anything measurable)
 
-**Done when:** a logged lean angle matches a physically measured one within a
-few degrees, *and* the steady-state-cornering behavior from
-[ARCHITECTURE.md](ARCHITECTURE.md) has been checked on a real ride rather than
-assumed.
+**Done when:** static and slow-speed angles are correct, and the drift rate over
+several minutes is *measured and written down* — that number is the baseline
+Phase 4 has to beat.
 
 ---
 
-## Phase 4 — Position and time
+## Phase 4 — Position, time, and GPS-aided lean
 
 - [ ] `GpsSource`: NMEA parsing on UART2
 - [ ] Carry-forward with `gage` staleness per [DATA-FORMAT.md](DATA-FORMAT.md)
 - [ ] Wall-clock time into `meta.json` at first fix
 - [ ] Sanity-check position against a known route
+- [ ] **Centripetal correction:** feed speed into fusion, `a − (ω × v)` (ADR-0010)
+- [ ] Mode switching with hysteresis: GPS-aided ↔ low-speed ↔ IMU-only, logged in `fmode`
+- [ ] Settle ADR-0007 by comparing filters on the *same recorded session*
+- [ ] Measure whether GPS latency biases the estimate under hard braking (Q6)
 
-**Done when:** a session carries a track that looks like the road actually
-ridden.
+**Done when:** a session carries a track matching the road ridden, and lean
+angle no longer drifts over a ride — compared against the Phase 3 baseline on
+recorded data, not by eye.
 
 ---
 
@@ -98,7 +108,10 @@ ridden.
 - [ ] Sealed, vibration-isolated enclosure
 - [ ] Rigid documented IMU mount
 - [ ] Power-loss flush (settles Q3)
-- [ ] First real ride, then re-check everything Phase 3 validated on the bench
+- [ ] First real ride, then re-check everything validated on the bench
+- [ ] Confirm steady-state cornering lean on a real ride — the one claim that
+      cannot be tested stationary ([ARCHITECTURE.md](ARCHITECTURE.md))
+- [ ] Measure the tire-width offset against a reference, settling Q5
 
 **Done when:** it survives a full ride and the data is trustworthy afterward.
 
@@ -110,6 +123,8 @@ Can run in parallel from Phase 2 onward, as soon as real files exist.
 
 - [ ] Python decoder honoring the schema-version and partial-row rules
 - [ ] Plots: lean angle over time, g-g diagram, speed and lean over a track map
+- [ ] Offline re-fusion: recompute lean from logged raw channels, so filter
+      changes can be evaluated against past rides without re-riding them
 - [ ] Session summary: max lean each way, hardest braking, distance, duration
 
 **Done when:** a card becomes a set of charts in one command.

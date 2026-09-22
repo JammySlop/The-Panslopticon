@@ -74,6 +74,38 @@ range is set to ±8g rather than the ±2g default.
 (frame, engine, rider). Unsprung is everything below it (wheels, brakes, lower
 fork). Comparing an IMU on each is how suspension behavior becomes visible.
 
+**Specific force** — What an accelerometer actually measures: acceleration
+minus gravity. A device at rest reads 1g upward, not zero. Distinguishing this
+from "acceleration" is the whole basis of the centripetal correction below.
+
+**Centripetal acceleration** — The inward acceleration of anything moving on a
+curve, magnitude `v·ψ̇`. On a leaned bike it points through the machine toward
+the corner's inside and is indistinguishable, to the accelerometer, from
+gravity being in a different place.
+
+**Centripetal correction** — Subtracting the centripetal term from the
+accelerometer using externally supplied speed: `a_gravity = a_measured − ω × v`.
+Restores the accelerometer as a valid vertical reference mid-corner. This
+project takes `v` from GPS. See ADR-0010.
+
+**Coordinated turn** — A turn in which the vehicle is banked exactly enough
+that occupants feel no sideways force — the resultant points straight "down"
+through the vehicle. A motorcycle in a steady corner is always in one, because
+anything else falls over. Gives `tan(lean) = v·ψ̇/g`.
+
+**Force-vector angle** — Lean angle computed from the resultant of gravity and
+cornering force. A few degrees less than actual chassis lean, because the
+contact patch shifts toward the inside of the tire as it rolls onto its
+shoulder. What this project logs, labeled as such.
+
+**Doppler speed** — How a GPS receiver measures velocity: from the frequency
+shift of satellite carriers, not by differencing positions. Around 0.05 m/s
+accurate, and far more trustworthy than the same receiver's position.
+
+**GPS-aided INS** — The general technique of using satellite navigation to
+bound the drift of an inertial system. What ADR-0010 is a narrow, cheap
+instance of.
+
 **Dead reckoning** — Estimating position from heading and speed when GPS is
 unavailable. Drifts quickly; mentioned here only to note it is *not* being done.
 

@@ -30,8 +30,9 @@ it is greppable, and a half-written file is still usable (ADR-0006).
 | `t_ms` | ms | Milliseconds since logger boot. Monotonic. The authoritative time base. |
 | `ax`, `ay`, `az` | g | Accelerometer, calibration applied |
 | `gx`, `gy`, `gz` | °/s | Gyroscope, zero-rate offset removed |
-| `roll` | ° | Fused orientation — sign per HARDWARE.md conventions |
+| `roll` | ° | Fused lean — sign per HARDWARE.md conventions. This is the **force-vector** angle; see below. |
 | `pitch` | ° | Fused orientation |
+| `fmode` | enum | How `roll` was produced: `0` IMU-only, `1` GPS-aided, `2` low-speed (correction not applied) |
 | `temp` | °C | MPU-6050 die temperature. Not ambient; useful for drift correlation. |
 | `fix` | 0/1 | GPS has a valid fix |
 | `lat`, `lon` | ° | WGS84, 7 decimal places (~1 cm — well past what the receiver delivers, but cheap) |
@@ -43,10 +44,26 @@ it is greppable, and a half-written file is still usable (ADR-0006).
 Example:
 
 ```csv
-t_ms,ax,ay,az,gx,gy,gz,roll,pitch,temp,fix,lat,lon,spd,crs,sats,gage
-12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,40
-12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,50
+t_ms,ax,ay,az,gx,gy,gz,roll,pitch,fmode,temp,fix,lat,lon,spd,crs,sats,gage
+12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,1,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,40
+12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,1,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,50
 ```
+
+### Why `fmode` exists, and why `roll` is not the whole story
+
+Lean angle is computed with GPS speed removing centripetal acceleration from
+the accelerometer (ADR-0010). When GPS drops out, or the bike is below about
+3 m/s, that correction is unavailable or meaningless and the filter falls back.
+The fallback is *recorded, not hidden* — `fmode` says which regime produced
+every single row, so analysis can weight or discard accordingly instead of
+silently comparing values of different quality.
+
+`roll` is the **force-vector angle**: the tilt of combined gravity and
+cornering force. Actual chassis lean is a few degrees greater, because the
+contact patch migrates toward the inside of the tire as it rolls onto its
+shoulder. That offset is tire-dependent and is *not* corrected in firmware
+(Q5). Raw `ax…gz` and `spd` are all logged, so a better estimate can be
+recomputed later from an existing session without re-riding it.
 
 ### The GPS-rate problem
 
@@ -96,7 +113,7 @@ Any tool reading these files must:
 
 ## Size
 
-About 110 bytes per row at 100 Hz ≈ 11 KB/s ≈ **40 MB per riding hour**. A 32GB
+About 112 bytes per row at 100 Hz ≈ 11 KB/s ≈ **40 MB per riding hour**. A 32GB
 card holds hundreds of hours. Storage is not a constraint; write *throughput*
 during a stall is the thing to watch.
 
