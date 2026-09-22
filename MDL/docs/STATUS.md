@@ -62,6 +62,8 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 | ~~Q7~~ | ~~CAN wheel speed?~~ **Closed — no CAN on this bike** | — |
 | Q8 | Wheel-speed source, if any? **Deferred by the owner** | Phase 9 only |
 | Q9 | Compensate rolling radius for lean? | Speed accuracy while leaned |
+| Q10 | Is the MPU-6050 still the right sensor? | Nothing yet; buy with Q1 |
+| Q11 | Add a magnetometer (9-axis)? | Nothing; settle by measurement |
 
 ## Known risks
 
@@ -89,6 +91,22 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 - Magnetometer analysed, not adopted (ADR-0017, opens Q10/Q11)
+Owner asked whether a 9-axis IMU could shore up lean angle when GPS is spotty.
+The principle holds better than expected: a magnetometer reads a world-fixed
+vector, so unlike the accelerometer it is *not* corrupted by cornering force,
+and steep mid-latitude inclination means roll genuinely is observable from it.
+The obstacle is disturbance - ignition coils, charging system, surrounding
+steel - and the worst case coincides with GPS's rather than complementing it,
+since tunnels and underpasses are full of rebar. That is the opposite of what
+makes ADR-0010's pairing work.
+Recorded two cheaper mitigations: propagating speed through short dropouts
+using already-logged `ax` (software only, added to Phase 4 regardless), and a
+lower-drift modern gyro, which improves the fallback path rather than adding a
+new one. The latter opened **Q10 - is the MPU-6050 still the right sensor?**
+Magnetometer itself is **Q11**, to be settled by logging real field data on
+the bike rather than by argument. Nothing decided.
 
 ### 2026-09-22 - Corrections: battery is OEM, wheel-speed source reopened
 Two fixes from the owner. The YTZ10S is **OEM** for this bike, not an upgrade

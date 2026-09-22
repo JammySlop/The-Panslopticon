@@ -91,6 +91,9 @@ Phase 4 has to beat.
 - [ ] Settle ADR-0007 by comparing filters on the *same recorded session*
 - [ ] PPS interrupt to timestamp when each fix was *valid* (bears on Q6)
 - [ ] Measure whether GPS latency biases the estimate under hard braking (Q6)
+- [ ] Bridge short dropouts by propagating speed from the last good fix using
+      logged longitudinal acceleration; measure how fast the error grows
+      (ADR-0017 — software only, worth doing regardless of Q8/Q11)
 
 **Done when:** a session carries a track matching the road ridden, and lean
 angle no longer drifts over a ride — compared against the Phase 3 baseline on

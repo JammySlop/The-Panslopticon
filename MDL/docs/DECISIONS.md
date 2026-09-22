@@ -584,6 +584,76 @@ GPS drops out, and partly about appetite for bracketry near the front brake.
 
 ---
 
+## ADR-0017: Magnetometer / 9-axis IMU — analysis, not yet a decision
+
+**Status:** **Deferred (2026-09-22)** — raised by the owner, analysed, not
+decided. Tracked as Q10 and Q11.
+
+Would a 9-axis IMU (accelerometer + gyro + magnetometer) shore up lean angle
+when GPS is unavailable?
+
+### The principle is sound — more so than it first appears
+
+A magnetometer measures **a world-fixed vector**. Unlike the accelerometer, it
+is *not* corrupted by cornering force — which is the entire reason the
+accelerometer cannot see steady-state lean (ADR-0010). At mid-latitudes
+magnetic inclination is steep (~60–70°), so the field has a large vertical
+component that projects strongly into the bike's roll plane. Rolling the
+machine rotates that projection measurably.
+
+**So lean is genuinely observable from a magnetometer, independent of GPS.**
+This is not a heading-only sensor being pressed into service; it is a second
+absolute attitude reference with a different failure mode from the first.
+
+### The practice on a motorcycle is the problem
+
+| Disturbance | Calibratable? |
+|---|---|
+| Steel engine, exhaust, fasteners (hard/soft iron) | **Yes** — constant in the sensor frame if rigidly mounted |
+| Ignition coils firing 50–100 ×/sec | No — time-varying |
+| Alternator under varying load, headlight, starter | No — time-varying |
+| Rebar, guardrails, structural steel, passing vehicles | No — external |
+
+**And the cruel part: tunnels, bridges, underpasses and urban canyons are full
+of structural steel. The magnetometer is least trustworthy in precisely the
+places GPS drops out.** The two sensors' worst cases coincide rather than
+complement — which is the opposite of what made the GPS/accelerometer pairing
+in ADR-0010 work.
+
+### Two distinct gaps, and this plugs the wrong one better
+
+- **Lean during dropout** — the missing input is *speed*, not heading. A
+  magnetometer attacks this only via the direct-roll-observation route above,
+  which is the disturbance-prone one.
+- **Heading / yaw** — currently unobservable without GPS and openly admitted as
+  such in [ARCHITECTURE.md](ARCHITECTURE.md). A magnetometer plugs this real
+  gap far more reliably, since heading tolerates noise that lean would not.
+
+### Cheaper things that address dropouts better
+
+1. **Propagate speed through short dropouts with longitudinal acceleration.**
+   `ax` is already logged. Integrating from the last good GPS speed drifts, but
+   a motorcycle cannot change speed arbitrarily fast, so over a 10–30 s tunnel
+   this is plausibly sufficient. **Software only, no new hardware.** This
+   should probably be done regardless of what Q10/Q11 decide.
+2. **A lower-drift gyro.** The MPU-6050 is old, and its bias drifts appreciably
+   with temperature — on a bike that goes from cold start to hot engine bay,
+   that is a live error source. A modern part drifts far less, shrinking
+   dropout error directly. Plausibly higher leverage than adding a
+   magnetometer. The schema already logs die temperature (`temp`), so the
+   correlation can be measured rather than assumed.
+3. **Resolving Q8** with a wheel-speed source — speed that never needs sky.
+
+### What would settle it
+
+Measurement, not argument. Log raw magnetometer data on the bike across a
+range of conditions — engine off, idling, revving, headlight on and off,
+through a tunnel — and see how much the field actually moves. That is cheap to
+do once a 9-axis part is on hand, and impossible to reason about in advance
+with any confidence.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -661,6 +731,38 @@ complete path through Phase 8, so this can stay open a long time.
 
 **Do not assume an answer in code.** ADR-0011's fusion already treats speed as
 a scalar from an unspecified source, which is what keeps this open at no cost.
+
+### Q10 — Is the MPU-6050 still the right sensor?
+
+Raised indirectly by ADR-0017. The GY-521/MPU-6050 was the project's starting
+assumption, not a comparison result. It is long in the tooth, is frequently
+counterfeited, and its gyro bias drifts with temperature — which matters on a
+machine that runs from ambient to engine-bay hot, and which directly sets how
+fast lean angle degrades during a GPS dropout.
+
+Modern alternatives (ICM-42688-P, BMI088, LSM6DSO) offer materially better bias
+stability for similar money. **Arguably higher leverage than adding a
+magnetometer**, since it improves the fallback path rather than adding a new
+one.
+
+**Interacts with Q1** — sensor count, placement and part number are one
+purchase decision. **Blocks nothing yet**; the source abstraction means the
+part can change without disturbing the architecture.
+
+### Q11 — Add a magnetometer (9-axis)?
+
+Analysed in ADR-0017. The principle is sound: a magnetometer is a world-fixed
+reference immune to the cornering force that defeats the accelerometer. The
+obstacle is disturbance from ignition, charging and surrounding steel — and its
+worst case coincides with GPS's rather than complementing it.
+
+**Settle by measurement, not argument:** log raw magnetometer data through
+engine off, idle, revving, lights on/off and a tunnel, and see how far the
+field actually moves. Cheap once the hardware is present.
+
+Note the smaller, separate case for it: **heading**, which the design currently
+cannot observe without GPS at all, and which tolerates far more noise than lean
+would.
 
 ### Q9 — Compensate rolling radius for lean angle?
 
