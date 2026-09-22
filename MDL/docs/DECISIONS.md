@@ -470,6 +470,66 @@ is from vendor ratings, not observation.
 
 ---
 
+## ADR-0015: Power - battery feed, ignition-sensed, fused at the terminal
+
+**Status:** Accepted (2026-09-22)
+
+Permanent 12 V from the battery, fused at the terminal, gated by a high-side
+load switch driven from an ignition-sense line, through a protected 5 V 2 A
+buck converter.
+
+**Why not ignition-switched power alone** (which earlier drafts assumed):
+accessory circuits on a bike are often thin, shared, and not designed for
+another load. A fused feed straight from the battery is electrically cleaner
+and does not depend on someone else's circuit having headroom. The cost is that
+permanent power cannot be left unmanaged.
+
+**Why it cannot be left unmanaged:** at ~100 mA drawn from 12 V against an
+8-12 Ah battery, the bike is **unlikely to crank after about two days parked**
+and flat after four. That is not a corner case, it is an ordinary week.
+
+**The ignition-sense line resolves both.** One thin wire from a switched
+accessory circuit, divided to 3.3 V, does two jobs:
+
+1. Gates a high-side MOSFET - genuine zero draw when parked, not merely low
+2. Gives firmware **advance warning** to close the session before the rails
+   collapse, converting the expected shutdown from an interruption into an
+   orderly one
+
+**Rejected:** battery-only with firmware deep sleep (no extra wire, but the
+converter's own quiescent of 2-10 mA still drains the battery over months, and
+shutdown becomes inference from voltage and motion rather than a fact); a
+manual switch (zero drain, but a forgotten switch costs either a flat battery
+or a whole ride of data); tapping an ignition-switched circuit for the main
+feed (depends on unknown headroom in someone else's wiring).
+
+### Protection chain
+
+Fuse, reverse-polarity MOSFET, TVS clamp, bulk capacitance, load switch,
+converter. **The fuse is the one item with no substitute and belongs as close
+to the positive terminal as it will physically go** - everything downstream,
+including the wiring itself, is what it protects.
+
+### Holdup capacitance belongs on the 12 V side
+
+Energy stored is 1/2 C V^2, so the same joules cost far less capacitance at
+higher voltage. For ~50 mJ - enough to flush and close a file - roughly
+**1600 uF at 12 V versus 7800 uF at 5 V.** Nearly 5x less part for the same
+flush window, which is what makes **Q3 achievable with an ordinary electrolytic
+rather than a supercapacitor.**
+
+### Cranking
+
+Starting drags the supply to **6-8 V** briefly. The converter must tolerate it
+or ride through on the bulk cap. Worth testing deliberately: it is the same
+failure path as power loss, and it happens on every single ride.
+
+**Wrong if:** the bike has no accessory circuit that is switched and safe to
+tap, in which case fall back to firmware deep sleep and accept the quiescent
+drain.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -503,11 +563,16 @@ Ignition-off, a timeout after motion stops, or a button? Affects how many
 one-minute junk sessions accumulate from stop lights, and how aggressive
 power-loss handling must be. Phase 2.
 
-### Q3 — Is power-loss flush achievable?
+### Q3 - Is power-loss flush achievable?
 
-The plan is to sense the falling supply rail and flush using the buck
-converter's bulk capacitance. Whether there is enough energy for an SD flush is
-an empirical question about a specific converter. Untested and unverified.
+**Substantially answered by ADR-0015, pending measurement.** Two mechanisms now
+serve it: the ignition-sense line gives advance warning *before* the rails fall,
+and ~1600 uF on the 12 V side stores roughly 50 mJ of holdup - enough for about
+100 ms at 500 mW, on paper.
+
+What remains is empirical: how long does an SD flush and file close actually
+take, and does the real converter hold regulation as its input decays? Measure
+in Phase 6, and size the capacitor from the measurement.
 
 ### Q5 — How much does tire width offset the lean estimate?
 

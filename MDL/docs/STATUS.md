@@ -34,6 +34,8 @@ Settled so far (details in [DECISIONS.md](DECISIONS.md)):
   ADR-0011, built in Phase 9, gated on whether the bike exposes it (Q7)
 - Built to extend later to a display, CAN, clutch switch, brake pressure
 
+- **Battery feed, ignition-sensed, fused at the terminal** - ADR-0015
+
 ## Next actions
 
 1. Open the Phase 0 PR against `main`.
@@ -81,6 +83,17 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 - Power settled (ADR-0015)
+Owner chose a direct battery feed, which forced the parasitic-drain question:
+at ~100 mA from 12 V against an 8-12 Ah battery, the bike would not crank after
+about two days parked. Resolved with an ignition-sense line gating a high-side
+load switch - zero draw when parked, and advance warning so firmware closes the
+session before the rails collapse rather than being cut off. Protection chain
+specified, with the 2A fuse at the battery terminal as the one non-substitutable
+item. Holdup capacitance moved to the 12V side: 1/2 C V^2 means ~1600uF at 12V
+does what ~7800uF would at 5V, which makes Q3 practical with an ordinary
+electrolytic. Q3 now substantially answered, pending measurement in Phase 6.
 
 ### 2026-09-22 — Storage settled (ADR-0014)
 The card, not the breakout, is the decision: rated continuous-write endurance

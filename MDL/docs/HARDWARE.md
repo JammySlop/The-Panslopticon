@@ -15,7 +15,8 @@ electronics on a running motorcycle.
 | Storage | 3.3V-native microSD breakout, SPI | Adafruit or SparkFun. See trap #2 and ADR-0014. |
 | Card | **Samsung PRO Endurance 32GB**, FAT32 | High-endurance class is the real decision — see below. |
 | GPS | **Drone-style u-blox M10 module** (Holybro M10 / Beitian class) | Antenna integrated and potted — built for vibration. 10 Hz, UBX capable. See ADR-0013. |
-| Power | 12V→5V buck converter, automotive rated | Plus protection — see trap #3. |
+| Power | 12V→5V buck, 2A, >=40V input rating | Pololu D24V22F5 / Recom R-78E / TPS54360-based. ADR-0015. |
+| Power protection | 2A fuse, P-MOSFET, TVS, 1000-2200uF | See the Power section - the fuse is not optional. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
 
 Future, not yet specified: brake pressure transducer, clutch switch tap,
@@ -53,7 +54,8 @@ change one, change the other.
 | GPIO42 | *reserved* CAN RX | |
 | GPIO40 | *reserved* clutch switch | Digital in, pull-up |
 | GPIO4 | *reserved* brake pressure | **ADC1** |
-| GPIO5 | *reserved* supply voltage sense | ADC1, via divider — for power-loss detection |
+| GPIO5 | Supply voltage sense | ADC1, via divider - power-loss detection and low-voltage cutoff |
+| GPIO6 | Ignition sense | Divided from a switched circuit. Input, the shutdown trigger. |
 
 **Avoid on the ESP32-S3:**
 
@@ -80,6 +82,72 @@ The MPU-6050's I2C address is set by the `AD0` pin: low = `0x68`, high = `0x69`.
 So two sensors share one bus with no extra hardware. A third needs either the
 ESP32's second I2C peripheral or a TCA9548A multiplexer. Worth knowing while
 the sensor-count question is still open.
+
+## Power
+
+Fed from the **battery directly**, switched by an ignition-sense line. Full
+reasoning in ADR-0015.
+
+> **Work on the battery safely.** Disconnect the negative terminal first and
+> reconnect it last. Do not tap ABS, ECU or ignition-critical circuits for the
+> sense line - use an accessory or lighting circuit.
+
+### Chain, from the battery outward
+
+| # | Stage | Part | Why |
+|---|---|---|---|
+| 1 | **Fuse** | 2 A inline, waterproof, **at the battery terminal** | A short anywhere downstream must blow this rather than melt the harness. Closest possible to the positive post. |
+| 2 | Reverse polarity | P-MOSFET (or Schottky, ~0.4 V drop) | Install mistakes happen once |
+| 3 | Transient clamp | TVS, SMCJ24A class | Load dump, inductive kickback from horn, solenoids, starter |
+| 4 | Bulk capacitance | 1000-2200 uF, **on the 12 V side** | Cranking ride-through and power-loss holdup - see below |
+| 5 | Load switch | High-side MOSFET, gated by ignition sense | True zero drain when parked |
+| 6 | Converter | 5 V 2 A buck, >=40 V input rating | Feeds the DevKitC-1's 5V pin |
+
+### Why the logger cannot simply sit on the battery
+
+Running draw is roughly 200 mA at 5 V, about **100 mA at 12 V**. Against a
+typical 8-12 Ah motorcycle battery:
+
+- **~2 days parked** - below ~50% charge, likely will not crank
+- ~4 days - flat
+
+Hence the ignition-sense line. It is a thin wire from any switched accessory
+circuit, divided down to 3.3 V, doing two jobs: gating the high-side load
+switch, and giving firmware advance warning to close the session cleanly before
+the rails collapse.
+
+### Holdup capacitance goes on the 12V side
+
+Stored energy is E = 1/2 C V^2, so the same joules cost far less capacitance at
+a higher voltage. To hold ~500 mW for ~100 ms (about 50 mJ):
+
+| Placement | Usable swing | Capacitance needed |
+|---|---|---|
+| **12 V input** | 12 V -> 9 V | **~1600 uF** |
+| 5 V output | 5 V -> 3.5 V | ~7800 uF |
+
+Nearly 5x less capacitor for the same flush window. This is what makes Q3
+practical with an ordinary electrolytic instead of a supercapacitor.
+
+### Cranking
+
+Starting drags the battery to **6-8 V** for a few hundred milliseconds. The
+converter must either tolerate that input or ride through on the bulk cap. A
+brownout mid-write is exactly the case the power-loss flush exists for, so
+this is a good thing to test deliberately rather than discover.
+
+### Budget
+
+| Load | Draw |
+|---|---|
+| ESP32-S3, logging, WiFi off | ~100 mA @ 3.3 V |
+| GPS module | ~40 mA |
+| SD card | ~30 mA average, **100-200 mA bursts** |
+| ESP32-S3 WiFi TX (offload only) | up to ~500 mA peak |
+
+A 2 A converter leaves comfortable margin, including WiFi peaks during offload.
+Feed 5 V into the DevKitC-1's 5V pin and let its onboard regulator make 3.3 V.
+**Do not back-power over USB and the 5V pin simultaneously** while debugging.
 
 ## Storage
 

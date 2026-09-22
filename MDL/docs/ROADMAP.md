@@ -111,12 +111,17 @@ recorded data, not by eye.
 
 ## Phase 6 — Put it on the bike
 
-- [ ] Protected 12V supply (reverse polarity, TVS, bulk capacitance)
-- [ ] Ignition-switched power
+- [ ] Protected 12V supply: **2A fuse at the battery terminal**, reverse-polarity
+      MOSFET, TVS clamp, 1000-2200uF bulk on the 12V side (ADR-0015)
+- [ ] Ignition-sense line to a high-side load switch and a GPIO
+- [ ] Verify true zero draw when parked, with a meter
 - [ ] Soldered build — no breadboard, no dupont connectors
 - [ ] Sealed, vibration-isolated enclosure
 - [ ] Rigid documented IMU mount
-- [ ] Power-loss flush (settles Q3)
+- [ ] Measure how long an SD flush and close actually takes, then size the
+      holdup capacitor from that number (settles Q3)
+- [ ] Test cranking brownout deliberately - 6-8V for a few hundred ms happens
+      on every ride, and it is the same failure path as power loss
 - [ ] First real ride, then re-check everything validated on the bench
 - [ ] Confirm steady-state cornering lean on a real ride — the one claim that
       cannot be tested stationary ([ARCHITECTURE.md](ARCHITECTURE.md))
