@@ -1,0 +1,16 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+
+# Local build/tooling artifacts
+*.bin
+*.elf
+*.map
+__pycache__/
+.venv/
+
+# Logged data pulled off the card — keep samples out of git unless deliberate
+*.csv
+!docs/**/*.csv
