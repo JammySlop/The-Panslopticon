@@ -9,6 +9,7 @@ you need to resume is here. Update it every session — see
 **Phase:** 0 — Planning and documentation
 **Last updated:** 2026-09-22
 **Branch:** `mdl/planning-docs`
+**Target bike:** 2006 Honda CBR600RR (PC37) — see [BIKE.md](BIKE.md)
 **Hardware built:** none
 **Firmware written:** none
 
@@ -20,7 +21,10 @@ datasheets and reasoning — **nothing has been measured on hardware.**
 
 Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
-- ESP32 + GY-521 over I2C, microSD over SPI, GPS over UART
+- **ESP32-S3-DevKitC-1 (N16R8)** — settled, ADR-0012
+- GY-521 over I2C
+- **Samsung PRO Endurance 32GB** on a 3.3V SPI breakout, FAT32 - ADR-0014
+- **Drone-style u-blox M10 GPS**, read as UBX `NAV-PVT` at 10 Hz + PPS — ADR-0013
 - Log to SD during the ride, offload over a WiFi AP when parked
 - PlatformIO with the Arduino framework
 - Source → bus → sink architecture, sampler and writer on separate cores
@@ -30,6 +34,10 @@ Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 - **Speed is its own fusion stage** — GPS + CAN wheel speed, designed in
   ADR-0011, built in Phase 9, gated on whether the bike exposes it (Q7)
 - Built to extend later to a display, CAN, clutch switch, brake pressure
+
+- **Battery feed, ignition-sensed, fused at the terminal** - ADR-0015
+
+- No CAN bus on this bike; **wheel-speed source undecided (Q8)** - ADR-0016
 
 ## Next actions
 
@@ -49,12 +57,13 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 | Q1 | How many IMUs, where, and for what? Deferred by the owner. | Wiring, schema width, sample rate, **axis conventions, end of Phase 1** |
 | Q2 | What ends a session? | Phase 2 |
 | Q3 | Is a power-loss flush achievable? | Phase 6 |
-| Q4 | Which ESP32 board variant? | Pin table |
 | Q5 | How much does tire width offset the lean estimate? | Analysis accuracy |
 | Q6 | Does GPS speed latency need compensating? | Phase 4 |
-| Q7 | Does the bike expose usable wheel speed on CAN? | **All of Phase 9** |
-| Q8 | Front wheel, rear wheel, or both? | Slip detection design |
+| ~~Q7~~ | ~~CAN wheel speed?~~ **Closed — no CAN on this bike** | — |
+| Q8 | Wheel-speed source, if any? **Deferred by the owner** | Phase 9 only |
 | Q9 | Compensate rolling radius for lean? | Speed accuracy while leaned |
+| Q10 | Is the MPU-6050 still the right sensor? | Nothing yet; buy with Q1 |
+| Q11 | Add a magnetometer (9-axis)? | Nothing; settle by measurement |
 
 ## Known risks
 
@@ -65,6 +74,9 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 - **Lean falls back to IMU-only during GPS dropouts**, where it drifts. The
   `fmode` column records when this happened so the data stays honest, but the
   drift rate itself is unmeasured.
+- **The under-seat exhaust is where electronics would naturally go.** Heat
+  constrains mounting and capacitor choice; undertail temperatures are
+  unmeasured.
 - **Wheel speed is biased by lean angle** — roughly 6% high at 45°, because the
   tire rolls on its shoulder. A systematic error correlated with the very
   quantity being measured. Mitigated by gating, unvalidated.
@@ -79,6 +91,87 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 - Magnetometer analysed, not adopted (ADR-0017, opens Q10/Q11)
+Owner asked whether a 9-axis IMU could shore up lean angle when GPS is spotty.
+The principle holds better than expected: a magnetometer reads a world-fixed
+vector, so unlike the accelerometer it is *not* corrupted by cornering force,
+and steep mid-latitude inclination means roll genuinely is observable from it.
+The obstacle is disturbance - ignition coils, charging system, surrounding
+steel - and the worst case coincides with GPS's rather than complementing it,
+since tunnels and underpasses are full of rebar. That is the opposite of what
+makes ADR-0010's pairing work.
+Recorded two cheaper mitigations: propagating speed through short dropouts
+using already-logged `ax` (software only, added to Phase 4 regardless), and a
+lower-drift modern gyro, which improves the fallback path rather than adding a
+new one. The latter opened **Q10 - is the MPU-6050 still the right sensor?**
+Magnetometer itself is **Q11**, to be settled by logging real field data on
+the bike rather than by argument. Nothing decided.
+
+### 2026-09-22 - Corrections: battery is OEM, wheel-speed source reopened
+Two fixes from the owner. The YTZ10S is **OEM** for this bike, not an upgrade
+over a YTZ7S - drain figures (~43 h to no-crank) are unchanged, the framing
+was wrong. And the front-wheel Hall sensor was **never agreed**: a skipped
+question was misread as approval. ADR-0016 is now `Deferred` with four options
+recorded rather than a decision, Q8 is reopened, and the pin table, BOM,
+roadmap and architecture no longer assume a Hall sensor. Phase 9 is gated on
+Q8 and may never be built - GPS-only is a complete path through Phase 8.
+
+### 2026-09-22 - Target bike recorded: 2006 CBR600RR (ADR-0016, closes Q7)
+Added [BIKE.md](BIKE.md) for vehicle-specific facts, kept separate so the
+logger design stays portable. Three findings changed decisions:
+**(1) No CAN bus** — the PC37 has a 4-pin K-line DLC only. Closes Q7 as a no
+and retires ADR-0009's CAN path. ADR-0011's fusion math is untouched — it was
+written against a speed scalar, agnostic about source — so what replaces CAN,
+if anything, stays open as Q8.
+**(2) Battery is a 6Ah YTZ7S**, not the 8-12Ah assumed — ~30 hours parked
+before it will not crank, which strengthens ADR-0015's ignition-sense line.
+**(3) Under-seat exhaust with a catalytic converter.** The obvious mounting
+location is the hottest part of the bike; capacitors now need 105C rating and
+mounting candidates are listed in BIKE.md for Q1 to choose from.
+K-line kept as optional Phase 10 for engine data only.
+
+### 2026-09-22 - Power settled (ADR-0015)
+Owner chose a direct battery feed, which forced the parasitic-drain question:
+at ~100 mA from 12 V against an 8-12 Ah battery, the bike would not crank after
+about two days parked. Resolved with an ignition-sense line gating a high-side
+load switch - zero draw when parked, and advance warning so firmware closes the
+session before the rails collapse rather than being cut off. Protection chain
+specified, with the 2A fuse at the battery terminal as the one non-substitutable
+item. Holdup capacitance moved to the 12V side: 1/2 C V^2 means ~1600uF at 12V
+does what ~7800uF would at 5V, which makes Q3 practical with an ordinary
+electrolytic. Q3 now substantially answered, pending measurement in Phase 6.
+
+### 2026-09-22 — Storage settled (ADR-0014)
+The card, not the breakout, is the decision: rated continuous-write endurance
+at 32GB spans ~7x between visually identical cards. Chose Samsung PRO
+Endurance 32GB. The deeper reason is stall behavior - consumer cards garbage
+collect on their own schedule, which *is* the 100 ms stall ADR-0002 exists to
+absorb. 32GB specifically, because larger cards ship exFAT and the ESP32 SD
+library handles it poorly. SPI over SD_MMC since throughput was never the
+constraint; SD_MMC 4-bit held in reserve. Phase 2 must measure real stall
+duration and check the endurance claim rather than trusting vendor ratings.
+
+### 2026-09-22 — GPS settled (ADR-0013)
+Chose a potted drone-style u-blox M10 module: antenna integrated and built for
+vibration, which no bare breakout is. All M8/M9/M10 parts hit the ~0.05 m/s
+velocity accuracy ADR-0010 assumes, so pricier options buy position quality
+this project does not need. Two design changes came out of it: **UBX `NAV-PVT`
+instead of NMEA**, because it carries `sAcc` — the receiver's own speed
+accuracy estimate — which replaces inferring fix quality from sats/HDOP in
+ADR-0011's gating; and **PPS wired to an interrupt**, which establishes when a
+fix was valid rather than when its bytes arrived (bears on Q6). Verify the
+module is genuine via `UBX-MON-VER` on arrival — counterfeits are common.
+Note the mounting conflict: IMU wants rigid frame, antenna wants sky.
+
+### 2026-09-22 — Board settled: ESP32-S3-DevKitC-1 N16R8 (ADR-0012, closes Q4)
+Dual core + WiFi + TWAI narrowed the field to the original ESP32 and the S3.
+Chose the S3 on PSRAM: buffer depth is the defense against SD stalls, and 8MB
+turns that from milliseconds into seconds. Native USB also drops the UART
+bridge chip, one less part to shake loose. **Pin table rewritten, not adjusted**
+— S3 numbering does not carry over (ADC1 is GPIO1–10; octal PSRAM consumes
+GPIO35–37; USB takes 19/20). Phase 1 must decide official PlatformIO platform
+vs the pioarduino fork and pin it.
 
 ### 2026-09-22 — Axis conventions folded into Q1
 Owner deferred the axis and sign conventions until the IMU count and purpose

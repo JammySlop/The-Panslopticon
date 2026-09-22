@@ -27,7 +27,8 @@ not the start of it.
 
 ## Phase 1 — Read one sensor
 
-- [ ] `platformio.ini` targeting `esp32dev`, Arduino framework, pinned libraries
+- [ ] Decide official `platform-espressif32` vs the `pioarduino` fork, and pin it
+- [ ] `platformio.ini` targeting `esp32-s3-devkitc-1`, Arduino framework, PSRAM enabled
 - [ ] `config.h` with every pin and rate from [HARDWARE.md](HARDWARE.md)
 - [ ] I2C bring-up: scan the bus, confirm `WHO_AM_I` returns `0x68`
 - [ ] Configure ranges: ±8g, ±500°/s, 44 Hz DLPF, 100 Hz sample rate
@@ -50,6 +51,8 @@ they should.
 - [ ] Motion-triggered session start; session end per Q2
 - [ ] Status LED: booting / idle / logging / error
 - [ ] **Stall test** — confirm a slow SD write does not disturb sample timing
+- [ ] Profile actual stall duration and frequency; size the buffer from that
+      measurement rather than a guess, and check the ADR-0014 endurance claim
 
 **Done when:** a bench session produces a valid CSV, pulling power mid-write
 loses only a bounded tail, and the timing test proves the decoupling works.
@@ -77,14 +80,20 @@ Phase 4 has to beat.
 
 ## Phase 4 — Position, time, and GPS-aided lean
 
-- [ ] `GpsSource`: NMEA parsing on UART2
+- [ ] Verify the module is genuine u-blox via `UBX-MON-VER` on arrival
+- [ ] Configure and **persist**: UBX protocol, 115200 baud, 10 Hz, PPS enabled
+- [ ] `GpsSource`: UBX `NAV-PVT` parsing on UART1
 - [ ] Carry-forward with `gage` staleness per [DATA-FORMAT.md](DATA-FORMAT.md)
 - [ ] Wall-clock time into `meta.json` at first fix
 - [ ] Sanity-check position against a known route
 - [ ] **Centripetal correction:** feed speed into fusion, `a − (ω × v)` (ADR-0010)
 - [ ] Mode switching with hysteresis: GPS-aided ↔ low-speed ↔ IMU-only, logged in `fmode`
 - [ ] Settle ADR-0007 by comparing filters on the *same recorded session*
+- [ ] PPS interrupt to timestamp when each fix was *valid* (bears on Q6)
 - [ ] Measure whether GPS latency biases the estimate under hard braking (Q6)
+- [ ] Bridge short dropouts by propagating speed from the last good fix using
+      logged longitudinal acceleration; measure how fast the error grows
+      (ADR-0017 — software only, worth doing regardless of Q8/Q11)
 
 **Done when:** a session carries a track matching the road ridden, and lean
 angle no longer drifts over a ride — compared against the Phase 3 baseline on
@@ -105,12 +114,17 @@ recorded data, not by eye.
 
 ## Phase 6 — Put it on the bike
 
-- [ ] Protected 12V supply (reverse polarity, TVS, bulk capacitance)
-- [ ] Ignition-switched power
+- [ ] Protected 12V supply: **2A fuse at the battery terminal**, reverse-polarity
+      MOSFET, TVS clamp, 1000-2200uF bulk on the 12V side (ADR-0015)
+- [ ] Ignition-sense line to a high-side load switch and a GPIO
+- [ ] Verify true zero draw when parked, with a meter
 - [ ] Soldered build — no breadboard, no dupont connectors
 - [ ] Sealed, vibration-isolated enclosure
 - [ ] Rigid documented IMU mount
-- [ ] Power-loss flush (settles Q3)
+- [ ] Measure how long an SD flush and close actually takes, then size the
+      holdup capacitor from that number (settles Q3)
+- [ ] Test cranking brownout deliberately - 6-8V for a few hundred ms happens
+      on every ride, and it is the same failure path as power loss
 - [ ] First real ride, then re-check everything validated on the bench
 - [ ] Confirm steady-state cornering lean on a real ride — the one claim that
       cannot be tested stationary ([ARCHITECTURE.md](ARCHITECTURE.md))
@@ -148,35 +162,42 @@ CAN has outgrown this list and has its own phase below.
 
 ---
 
-## Phase 9 — CAN wheel speed and speed fusion
+## Phase 9 — Wheel speed and speed fusion (optional)
 
-Designed in ADR-0011, built here. **Entirely gated on Q7** — whether the bike
-exposes usable wheel speed on a readable bus. Answer that before any of the
-rest, because a negative answer ends the phase.
+Designed in ADR-0011. **Gated on Q8, which is open** — the CAN path is retired
+(the bike has no bus) and no replacement has been chosen. GPS-only is a
+complete path through Phase 8, so this phase may never be built.
 
-*Reconnaissance*
-- [ ] Identify the bike, confirm it has CAN, find a non-destructive tap point
-- [ ] SN65HVD230 (or TJA1051T/3) transceiver on the reserved TWAI pins
-- [ ] Passive sniff: log raw frames to the card, ride, then analyze offline
-- [ ] Identify the wheel-speed message ID, byte layout, scaling and endianness
-- [ ] Determine whether the value carries the speedo's optimistic bias —
-      measure against GPS, do not assume
-- [ ] Settle Q8: is front, rear, or both available?
+*Prerequisite*
+- [ ] **Settle Q8:** fitted front-wheel Hall sensor, a tap on the existing
+      speedometer sensor, or no wheel source at all. See ADR-0016.
 
-*Fusion*
-- [ ] `CanSource` decoding wheel speed into the sample bus
+*Firmware — source-agnostic once Q8 is answered*
+- [ ] `WheelSource` producing speed from whatever Q8 selects
 - [ ] Online scale-factor estimator for `k`, logged as `kwhl`
-- [ ] Gating state machine — fix quality, speed, lean, accel, ABS/TC
+- [ ] Gating state machine — `sAcc`, speed, lean, longitudinal accel
 - [ ] Latency compensation via a ring buffer of past estimates
 - [ ] Degradation ladder with `vsrc` logged per row
-- [ ] Slip, lock-up and wheelie detection by cross-checking against the IMU
+- [ ] Slip and lift detection by cross-check against the IMU. Which failure
+      modes matter depends on which wheel Q8 lands on.
 
 *Validation*
 - [ ] Confirm `k` converges and then stays put over a ride
 - [ ] Confirm tunnel or tree-cover transitions are seamless in `vfus`
-- [ ] Compare lean angle from GPS-only against fused speed on the same session
-- [ ] Decide Q9: is lean-angle rolling-radius compensation worth the coupling?
+- [ ] Measure the relevant tyre's crown arc and settle Q9
 
-**Done when:** speed is continuous and accurate through GPS dropouts, `k` is
-stable, and the lean estimate measurably improves under braking — verified
-against a recorded session, not impressions.
+**Done when:** speed is continuous through GPS dropouts, `k` is stable, and the
+lean estimate measurably improves under braking — on a recorded session, not
+impressions.
+
+---
+
+## Phase 10 — K-line engine data (optional)
+
+Independent of everything else. The DLC carries RPM, throttle position and
+coolant temperature at 5–10 Hz. Community-reverse-engineered (pgmfi.org,
+RaceChrono). Useful, unrelated to the primary goals, unscheduled.
+
+- [ ] K-line transceiver on the reserved pin
+- [ ] Honda diagnostic request/response implementation
+- [ ] `KLineSource` for RPM, TPS, coolant temp

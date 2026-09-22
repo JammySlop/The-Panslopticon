@@ -10,24 +10,28 @@ electronics on a running motorcycle.
 
 | Part | Choice | Notes |
 |---|---|---|
-| MCU | ESP32-WROOM-32 devkit (30 or 38 pin) | Dual core, WiFi, built-in CAN controller. 3.3V logic, **not 5V tolerant**. |
+| MCU | **ESP32-S3-DevKitC-1 (N16R8)** | Dual core, WiFi, TWAI/CAN, 16MB flash, 8MB PSRAM, native USB. 3.3V logic, **not 5V tolerant**. See ADR-0012. |
 | IMU | GY-521 breakout (MPU-6050) | Count and placement still open — see [DECISIONS.md](DECISIONS.md#open-questions). |
-| Storage | microSD breakout, 3.3V native, SPI | See trap #2. Card: 8–32GB, FAT32, name-brand. |
-| GPS | u-blox NEO-M8N (or NEO-6M) | M8N does 10Hz; the 6M is 1–5Hz and cheaper. Phase 4. |
-| Power | 12V→5V buck converter, automotive rated | Plus protection — see trap #3. |
+| Storage | 3.3V-native microSD breakout, SPI | Adafruit or SparkFun. See trap #2 and ADR-0014. |
+| Card | **Samsung PRO Endurance 32GB**, FAT32 | High-endurance class is the real decision — see below. |
+| GPS | **Drone-style u-blox M10 module** (Holybro M10 / Beitian class) | Antenna integrated and potted — built for vibration. 10 Hz, UBX capable. See ADR-0013. |
+| Power | 12V→5V buck, 2A, >=40V input rating | Pololu D24V22F5 / Recom R-78E / TPS54360-based. ADR-0015. |
+| Power protection | 2A fuse, P-MOSFET, TVS, 1000-2200uF **105C rated** | See the Power section. The fuse is not optional; the temperature rating is not either, given the exhaust. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
+
+| Wheel speed | **undecided — see Q8** | No CAN and no ABS sensors on this bike. GPS-only is a complete path; a wheel source is optional. |
 
 Future, not yet specified: brake pressure transducer, clutch switch tap,
 display.
 
-**CAN transceiver** (SN65HVD230 or TJA1051T/3) has a concrete purpose now —
-wheel speed for the speed estimate (ADR-0011), not just eventual engine data.
-The ESP32's TWAI controller does the protocol work, so the transceiver is the
-only part needed. Choose a **3.3V** part: the SN65HVD230 runs natively at 3.3V,
-while many common CAN breakouts are 5V and reintroduce trap #1. Tap the bus at
-a diagnostic connector where possible rather than splicing into harness wiring
-— a motorcycle's CAN bus carries braking and engine management, and a bad
-splice there is a safety issue, not just a data one.
+**The target vehicle is a 2006 Honda CBR600RR** — see [BIKE.md](BIKE.md) for
+what that constrains. Most importantly: no CAN bus, a 6Ah battery, and an
+under-seat exhaust where you would otherwise mount things.
+
+**No CAN transceiver is needed.** The 2006 CBR600RR has no CAN bus (BIKE.md).
+Whether any wheel-speed source replaces it is open — see Q8 and ADR-0016.
+Should the project ever move to a CAN-equipped bike, use a **3.3V** part such
+as the SN65HVD230 — many common CAN breakouts are 5V and reintroduce trap #1.
 
 ## Pin budget
 
@@ -37,29 +41,42 @@ change one, change the other.
 
 | Pin | Use | Notes |
 |---|---|---|
-| GPIO21 | I2C SDA | Default ESP32 I2C pins |
-| GPIO22 | I2C SCL | Shared by all IMUs and any future I2C device |
-| GPIO18 | SD SCK | VSPI |
-| GPIO19 | SD MISO | VSPI |
-| GPIO23 | SD MOSI | VSPI |
-| GPIO5 | SD CS | Strapping pin, must be high at boot — SPI CS idles high, so OK |
-| GPIO16 | GPS RX (ESP32 ← GPS TX) | UART2 |
-| GPIO17 | GPS TX (ESP32 → GPS RX) | UART2 |
-| GPIO2 | Status LED | Onboard LED on most devkits |
-| GPIO4 | Offload button | Input, pull-up, debounced |
-| GPIO25 | *reserved* CAN TX | TWAI is remappable; these are convention |
-| GPIO26 | *reserved* CAN RX | |
-| GPIO27 | *reserved* clutch switch | Digital in, pull-up |
-| GPIO34 | *reserved* brake pressure | **ADC1**, input-only, no internal pull-up |
-| GPIO35 | *reserved* supply voltage sense | ADC1, via divider — for power-loss detection |
+| GPIO17 | I2C SDA | Shared by all IMUs and any future I2C device |
+| GPIO18 | I2C SCL | |
+| GPIO12 | SD SCK | SPI |
+| GPIO11 | SD MOSI | |
+| GPIO13 | SD MISO | |
+| GPIO14 | SD CS | |
+| GPIO16 | GPS RX (ESP32 ← GPS TX) | UART1 |
+| GPIO15 | GPS TX (ESP32 → GPS RX) | UART1 |
+| GPIO21 | GPS PPS | 1 pulse/second timing reference — interrupt input (ADR-0013) |
+| GPIO48 | Status LED | Onboard addressable RGB on the DevKitC-1 |
+| GPIO47 | Offload button | Input, pull-up, debounced. The onboard BOOT button on GPIO0 is a fallback. |
+| GPIO41 | *reserved* wheel speed input | **Source undecided (Q8)** — reserved, unassigned |
+| GPIO42 | *reserved* K-line (engine data, optional) | Needs a K-line transceiver; deferred |
+| GPIO40 | *reserved* clutch switch | Digital in, pull-up |
+| GPIO4 | *reserved* brake pressure | **ADC1** |
+| GPIO5 | Supply voltage sense | ADC1, via divider - power-loss detection and low-voltage cutoff |
+| GPIO6 | Ignition sense | Divided from a switched circuit. Input, the shutdown trigger. |
 
-**Avoid:** GPIO6–11 (connected to the internal flash — using them bricks the
-boot), GPIO12 (strapping pin, must be LOW at boot; pulling it high stops the
-board booting).
+**Avoid on the ESP32-S3:**
 
-**ADC1 vs ADC2:** ADC2 pins stop working while WiFi is active. Every analog
-input above is on ADC1 (GPIO32–39) for that reason. This is not optional — it
-is a silicon limitation, not a driver bug.
+| Pins | Why |
+|---|---|
+| GPIO26–32 | SPI flash. Using them stops the board booting. |
+| **GPIO35, 36, 37** | **Consumed by octal PSRAM on the N16R8.** Free on paper, unusable in practice — the single most common S3 pin-budget mistake. |
+| GPIO19, 20 | Native USB D− / D+. Available only if USB is given up. |
+| GPIO43, 44 | UART0 — the serial console. |
+| GPIO45, 46 | Strapping pins; GPIO46 is additionally input-only. |
+| GPIO22–25 | Do not exist on the S3. |
+
+**ADC1 vs ADC2:** ADC2 stops working while WiFi is active. On the S3, **ADC1 is
+GPIO1–10** (not GPIO32–39 as on the original ESP32), so every analog input above
+sits there. Silicon limitation, not a driver bug.
+
+> **This table changed wholesale when the board was settled (ADR-0012).** Pin
+> numbering does not carry over from the original ESP32 — anything written
+> against the old table is wrong.
 
 ### Two GY-521s on one bus
 
@@ -67,6 +84,153 @@ The MPU-6050's I2C address is set by the `AD0` pin: low = `0x68`, high = `0x69`.
 So two sensors share one bus with no extra hardware. A third needs either the
 ESP32's second I2C peripheral or a TCA9548A multiplexer. Worth knowing while
 the sensor-count question is still open.
+
+## Power
+
+Fed from the **battery directly**, switched by an ignition-sense line. Full
+reasoning in ADR-0015.
+
+> **Work on the battery safely.** Disconnect the negative terminal first and
+> reconnect it last. Do not tap ABS, ECU or ignition-critical circuits for the
+> sense line - use an accessory or lighting circuit.
+
+### Chain, from the battery outward
+
+| # | Stage | Part | Why |
+|---|---|---|---|
+| 1 | **Fuse** | 2 A inline, waterproof, **at the battery terminal** | A short anywhere downstream must blow this rather than melt the harness. Closest possible to the positive post. |
+| 2 | Reverse polarity | P-MOSFET (or Schottky, ~0.4 V drop) | Install mistakes happen once |
+| 3 | Transient clamp | TVS, SMCJ24A class | Load dump, inductive kickback from horn, solenoids, starter |
+| 4 | Bulk capacitance | 1000-2200 uF, **on the 12 V side** | Cranking ride-through and power-loss holdup - see below |
+| 5 | Load switch | High-side MOSFET, gated by ignition sense | True zero drain when parked |
+| 6 | Converter | 5 V 2 A buck, >=40 V input rating | Feeds the DevKitC-1's 5V pin |
+
+### Why the logger cannot simply sit on the battery
+
+Running draw is roughly 200 mA at 5 V, about **100 mA at 12 V**. Against the
+bike's OEM 8.6 Ah YTZ10S ([BIKE.md](BIKE.md)):
+
+- **~43 hours parked** - below ~50% charge, likely will not crank
+- ~86 hours - flat
+
+Hence the ignition-sense line. It is a thin wire from any switched accessory
+circuit, divided down to 3.3 V, doing two jobs: gating the high-side load
+switch, and giving firmware advance warning to close the session cleanly before
+the rails collapse.
+
+### Holdup capacitance goes on the 12V side
+
+Stored energy is E = 1/2 C V^2, so the same joules cost far less capacitance at
+a higher voltage. To hold ~500 mW for ~100 ms (about 50 mJ):
+
+| Placement | Usable swing | Capacitance needed |
+|---|---|---|
+| **12 V input** | 12 V -> 9 V | **~1600 uF** |
+| 5 V output | 5 V -> 3.5 V | ~7800 uF |
+
+Nearly 5x less capacitor for the same flush window. This is what makes Q3
+practical with an ordinary electrolytic instead of a supercapacitor.
+
+### Cranking
+
+Starting drags the battery to **6-8 V** for a few hundred milliseconds. The
+converter must either tolerate that input or ride through on the bulk cap. A
+brownout mid-write is exactly the case the power-loss flush exists for, so
+this is a good thing to test deliberately rather than discover.
+
+### Budget
+
+| Load | Draw |
+|---|---|
+| ESP32-S3, logging, WiFi off | ~100 mA @ 3.3 V |
+| GPS module | ~40 mA |
+| SD card | ~30 mA average, **100-200 mA bursts** |
+| ESP32-S3 WiFi TX (offload only) | up to ~500 mA peak |
+
+A 2 A converter leaves comfortable margin, including WiFi peaks during offload.
+Feed 5 V into the DevKitC-1's 5V pin and let its onboard regulator make 3.3 V.
+**Do not back-power over USB and the 5V pin simultaneously** while debugging.
+
+## Storage
+
+### The card matters far more than the breakout
+
+Continuous-write endurance at 32GB differs by roughly 7x across cards that
+look identical on a shelf:
+
+| Card | Rated continuous recording |
+|---|---|
+| **Samsung PRO Endurance 32GB** | **17,520 h** |
+| SanDisk Max Endurance 32GB | 15,000 h |
+| SanDisk High Endurance 32GB | 2,500 h |
+| Generic consumer card | unrated, and stalls unpredictably |
+
+A logger writing continuously in a vehicle is exactly the dashcam workload
+these cards exist for. Consumer cards are built for bursty camera use and do
+their garbage collection whenever they feel like it - which is the 100 ms stall
+the entire buffering architecture exists to absorb. A high-endurance card does
+not eliminate stalls, it makes them shorter and rarer.
+
+### Why SPI, and the escape hatch
+
+SPI needs four pins and is trivially reliable. The requirement is ~14 KB/s;
+SPI comfortably delivers a hundred times that, so throughput is not the
+constraint - stall latency is, and that is a property of the card, not the bus.
+
+The ESP32-S3 also supports **SD_MMC in 4-bit mode**, which is far faster and
+pin-flexible on the S3 (unlike the original ESP32's fixed pins). Held in
+reserve: if the log format ever moves to binary at high rate, or a stall
+profile turns out to need deeper pipelining, it is available for two more
+pins. Not needed now.
+
+### Wiring notes
+
+- **Format FAT32.** The ESP32 SD library's exFAT support is poor, and cards
+  above 32GB ship exFAT by default. 32GB avoids the whole question.
+- **Decoupling capacitance at the socket.** Cards draw 100-200 mA bursts while
+  writing. Without local bulk capacitance this browns out the 3.3V rail and
+  produces "random" resets that look like firmware bugs. 10 uF plus 100 nF.
+- **Keep SPI runs short.** Long dupont leads cause mount failures that look
+  exactly like a bad card. Start at 4 MHz, raise once stable.
+- **Vibration:** a push-push socket can lose contact on a bike. Bench work on a
+  breakout is fine; the final build wants a soldered socket, strain-relieved
+  (trap #4).
+
+## GPS configuration
+
+The module must be configured once and the settings **saved to battery-backed
+RAM**, or every power cycle resets it. On a logger that power-cycles at every
+stop, that is not a minor annoyance.
+
+| Setting | Default | Use | Why |
+|---|---|---|---|
+| Protocol | NMEA | **UBX `NAV-PVT`** | One binary message carries speed, heading, fix status *and* `sAcc`. See below. |
+| Baud | 9600 | **115200** | 9600 cannot carry 10 Hz. Silently drops messages if left alone. |
+| Update rate | 1 Hz | **10 Hz** | Matches the design; 1 Hz makes the speed input uselessly stale |
+| Backup power | — | **battery/supercap fitted** | Retains ephemeris: time-to-first-fix drops from ~30 s to ~1 s |
+
+### Why UBX rather than NMEA
+
+NMEA gives speed (`VTG`, `RMC`) but no statement of how good it is. UBX
+`NAV-PVT` includes **`sAcc`, a per-fix speed accuracy estimate**, which is
+exactly what ADR-0011's gating needs — the receiver reporting its own
+confidence beats inferring it from satellite count and HDOP. It is also more
+compact, and one message replaces parsing several sentences.
+
+### PPS
+
+The module's 1-pulse-per-second output is accurate to roughly 30 ns. Wired to
+an interrupt pin, it pins down *when* a fix was actually valid rather than when
+its bytes finished arriving over UART — which is the hard half of the latency
+problem in Q6. One GPIO, and it can be ignored until Phase 4.
+
+### Antenna placement
+
+The antenna needs sky. Under a plastic fairing or tailpiece is fine; under
+metal or carbon is not. This constrains where the enclosure goes as much as
+the IMU mounting does, and the two requirements can conflict — the IMU wants
+rigid frame mounting, the GPS wants an unobstructed view upward. Separating the
+GPS module from the main enclosure on a cable is the usual resolution.
 
 ## Sensor configuration
 

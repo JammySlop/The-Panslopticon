@@ -62,8 +62,8 @@ an input:
        │  ┌───────────────┐
  GPS ──┼─▶│ speed fusion  │── v_fused ──┐
        │  │  (ADR-0011)   │             │
- CAN ──┼─▶│               │             ▼
- wheel │  └───────────────┘   ┌──────────────────┐
+ Wheel─┼─▶│               │             ▼
+ (Q8)  │  └───────────────┘   ┌──────────────────┐
        │         │            │ orientation      │──▶ roll, pitch ──▶ bus
        └─────────┼───────────▶│ fusion (ADR-0010)│
                  │            └──────────────────┘
@@ -71,8 +71,10 @@ an input:
  GPS ────────────────────────────────── position channels ──────────▶ bus
 ```
 
-**Stage 1 — speed fusion** reconciles GPS Doppler speed with CAN wheel speed
-into one best estimate. **Stage 2 — orientation fusion** consumes that estimate
+**Stage 1 — speed fusion** reconciles GPS Doppler speed with a wheel-speed
+source into one best estimate. (**The wheel source is undecided — Q8.** The
+target bike has no CAN bus, and the fusion is agnostic about where the scalar
+comes from, which is what lets the question stay open at no cost.) **Stage 2 — orientation fusion** consumes that estimate
 to remove centripetal acceleration from the accelerometer. Stage 2 does not
 care where speed came from, which is what lets CAN be added later without
 touching it.
@@ -139,7 +141,7 @@ firmware/
     ├── sources/
     │   ├── Source.h        interface: begin(), read(Sample&), name()
     │   ├── ImuSource.cpp   GY-521 over I2C
-    │   └── GpsSource.cpp   NMEA over UART
+    │   └── GpsSource.cpp   UBX NAV-PVT over UART + PPS interrupt (ADR-0013)
     ├── sinks/
     │   ├── Sink.h          interface: begin(), write(const Sample&), flush()
     │   ├── SdSink.cpp      buffered session writer
@@ -173,7 +175,8 @@ That has a hard consequence worth stating plainly:
   filter can correct drift against. Lean angle is achievable.
 - **Yaw (heading) is not.** With gyro only, it drifts without bound and nothing
   on the board can correct it. Heading must come from GPS course-over-ground,
-  which is only valid while actually moving.
+  which is only valid while actually moving. *(A magnetometer would fix this —
+  analysed in ADR-0017, open as Q11.)*
 
 There is a second complication specific to motorcycles: in a steady corner, a
 bike leans until the *combined* gravity and cornering force points straight
@@ -223,7 +226,7 @@ during transients, not just in steady state.
 | Condition | Effect | Fallback |
 |---|---|---|
 | Speed below ~3 m/s | Correction is negligible and GPS speed is noisy | Raw accelerometer is trustworthy here — centripetal force is near zero |
-| GPS dropout (tunnel, tree cover) | No speed | IMU-only; **flag it in the log**, never degrade silently |
+| GPS dropout (tunnel, tree cover) | No speed | IMU-only; **flag it in the log**, never degrade silently. Short dropouts could be bridged by propagating speed with logged `ax` — see ADR-0017. |
 | GPS latency (50–200 ms) | Correction lags fast transients | The gyro owns transients regardless; GPS only corrects slow drift |
 
 The two sensors fail in opposite regimes, which is what makes the pairing work

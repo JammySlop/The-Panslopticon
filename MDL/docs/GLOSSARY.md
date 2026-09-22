@@ -132,9 +132,45 @@ not slipping, and GPS is healthy — and is otherwise frozen and used as-is.
 describes a moment already past. Requires keeping a short history to compare
 against, rather than applying an old measurement to the present.
 
+**UBX** — u-blox's binary protocol, an alternative to NMEA text. More compact,
+and it reports accuracy estimates NMEA simply does not carry.
+
+**NAV-PVT** — The UBX message giving Position, Velocity and Time together, plus
+fix status and accuracy estimates. One message replaces several NMEA sentences.
+
+**sAcc** — The speed accuracy estimate in `NAV-PVT`: the receiver's own
+statement of how much to trust its velocity. Drives the ADR-0011 gating.
+
+**PPS** — Pulse Per Second. A GNSS receiver's hardware timing output, accurate
+to tens of nanoseconds, marking the exact top of each second.
+
+**TTFF** — Time To First Fix. Cold from nothing is ~30 s; hot, with retained
+ephemeris from a backup battery, ~1 s.
+
+**Ephemeris** — The orbital data a receiver needs to compute a fix. Retaining
+it across power cycles is what a backup battery buys.
+
 **HDOP** — Horizontal Dilution of Precision. A measure of how favorably the
 visible satellites are arranged. Low is good; a high value means the fix is
 geometrically weak even with plenty of satellites.
+
+**Magnetometer** — Measures the local magnetic field. Gives an absolute
+world-fixed reference vector, which is why it is immune to the cornering force
+that defeats the accelerometer - and why it is ruined by nearby steel and
+electrical current.
+
+**Hard-iron / soft-iron distortion** — Permanent magnetic offset, and
+field-warping, from ferrous mass near the sensor. Both are constant in the
+sensor frame if the mounting is rigid, so both are calibratable. Time-varying
+and external disturbance is not.
+
+**Magnetic inclination** — The angle Earth's field dips below horizontal,
+around 60-70 degrees at mid-latitudes. The steepness is what makes roll
+observable from a magnetometer.
+
+**Bias stability** — How much a gyroscope's zero-rate offset wanders over time
+and temperature. It sets how fast an integrated angle drifts, and is the main
+figure separating a modern IMU from the MPU-6050.
 
 **Dead reckoning** — Estimating position from heading and speed when GPS is
 unavailable. Drifts quickly; mentioned here only to note it is *not* being done.

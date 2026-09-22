@@ -277,7 +277,7 @@ Adaptation runs only when all hold. Otherwise `k` is frozen and simply used.
 
 | Condition | Threshold (provisional) | Reason |
 |---|---|---|
-| GPS fix quality | sats ≥ 6, HDOP low | A bad fix teaches the wrong scale |
+| GPS fix quality | **`sAcc` below threshold** (UBX `NAV-PVT`) | The receiver's own speed-accuracy estimate — better than inferring from sats/HDOP. ADR-0013. |
 | Speed | > 5 m/s | GPS speed is noisy near standstill |
 | Lean | \|θ\| < 10° | Avoids the lean/rolling-radius coupling |
 | Longitudinal accel | small | Drive slip and braking slip both corrupt wheel speed |
@@ -334,6 +334,326 @@ and silently so).
 
 ---
 
+## ADR-0012: ESP32-S3-DevKitC-1 (N16R8) as the board
+
+**Status:** Accepted (2026-09-22) — settles Q4
+
+**Hard requirements filtered the field fast.** Dual core (ADR-0002's
+sampler/writer split), WiFi (ADR-0003 offload), and TWAI/CAN (ADR-0011) between
+them eliminate the S2, C3 and C6 (single core) and the H2 and P4 (no WiFi).
+That leaves the original ESP32 and the S3.
+
+| | ESP32-WROOM-32 DevKitC | **ESP32-S3-DevKitC-1 N16R8** |
+|---|---|---|
+| Cost | ~$6.50 | ~$8–15 |
+| Cores | 2 × LX6 @ 240MHz | 2 × LX7 @ 240MHz |
+| PSRAM | none (~320KB usable SRAM) | **8 MB** |
+| USB | CH340/CP2102 bridge chip | **native** |
+| CAN / TWAI | yes | yes |
+| Ecosystem | most examples, oldest | the 2026 default recommendation |
+
+**Why the S3, for this project specifically:**
+
+1. **PSRAM is the deciding factor.** The bottleneck here is not compute, it is
+   surviving an SD card that disappears for 100 ms without dropping samples.
+   Buffer depth is the entire defense, and it is the one thing the original
+   ESP32 cannot scale — 8 MB buys buffering measured in seconds rather than
+   milliseconds. This is ADR-0002's whole premise, made robust.
+2. **Native USB removes the bridge chip** — one fewer component to shake loose
+   on a vibrating frame, and it opens USB mass-storage as a second offload path
+   beside WiFi.
+3. Cost difference is a few dollars against a build that will cost far more in
+   connectors and enclosure.
+
+**Costs accepted:**
+
+- **PlatformIO friction.** Espressif and PlatformIO fell out, and the official
+  `platform-espressif32` stalled at Arduino core 2.x. Core 3.x lives in the
+  community [`pioarduino` fork](https://github.com/pioarduino/platform-espressif32).
+  The S3 does work on the official platform; the fork is where maintenance
+  actually happens. Decide in Phase 1 and pin it in `platformio.ini`.
+- **The pin table was rewritten, not adjusted.** S3 numbering does not map onto
+  the original ESP32's — ADC1 is GPIO1–10, and native USB occupies GPIO19/20,
+  which previously held SD MISO.
+- **Octal PSRAM eats GPIO35–37.** They look free and are not.
+
+**Rejected:** the original ESP32 (cheapest and best-documented, but RAM caps
+buffer depth and the UART bridge is an extra failure point), and buying both to
+decide later (defers a decision that the buffering argument already settles).
+
+**Wrong if:** the SD stall test in Phase 2 shows modest buffers suffice and
+PSRAM goes unused, at which point the original ESP32 becomes the cheaper equal.
+
+---
+
+## ADR-0013: GPS — drone-style u-blox M10 module, read over UBX
+
+**Status:** Accepted (2026-09-22)
+
+A potted drone-type GNSS module (Holybro M10 / Beitian class) with integrated
+antenna, read as **UBX `NAV-PVT`** at 10 Hz, with PPS wired to an interrupt.
+
+**Why this module class:** it is the only option already built for the
+environment. Antenna, receiver and shielding are potted into one vibration-
+tolerant unit, because quadcopters shake too. A bare breakout means sourcing an
+antenna, a ground plane and weatherproofing separately, and hand-assembled RF
+on a motorcycle is a poor bet. All u-blox M8/M9/M10 parts spec **~0.05 m/s
+velocity accuracy**, which is the figure ADR-0010 already assumes — so the
+expensive options buy position quality this project does not need.
+
+**Rejected:** NEO-6M class (1–5 Hz, GPS-only, saturated with counterfeits),
+SparkFun/Adafruit MAX-M10S breakout (genuine and well documented, but leaves
+antenna and mounting as an exercise), NEO-M9N (25 Hz and superb multipath
+rejection, for a 10 Hz requirement).
+
+**Known risk:** chipset provenance on cheap modules is variable and counterfeit
+u-blox parts are common. Verify on arrival by querying `UBX-MON-VER` and
+confirming the reported chip matches what was sold.
+
+### UBX instead of NMEA
+
+NMEA reports speed but never says how good it is. UBX `NAV-PVT` carries
+position, velocity, heading, fix status and **`sAcc` — a per-fix speed accuracy
+estimate — in one binary message.** ADR-0011's gating was going to infer fix
+quality from satellite count and HDOP; `sAcc` is the receiver stating its own
+confidence directly, which is strictly better and simpler. ADR-0011's gating
+table is updated accordingly.
+
+### PPS
+
+The 1 Hz timing pulse is accurate to ~30 ns. On an interrupt pin it establishes
+when a fix was *valid*, as distinct from when its bytes arrived over UART —
+the hard half of Q6. Costs one GPIO. Ignorable until Phase 4, wired now because
+adding a wire to a potted enclosure later is worse.
+
+**Consequence:** the GPS module likely lives outside the main enclosure, on a
+cable. The IMU wants rigid frame mounting; the antenna wants sky. Those two
+requirements conflict, and separating them is the usual resolution — this feeds
+into Q1's mounting plan.
+
+---
+
+## ADR-0014: Storage - high-endurance card on a 3.3V SPI breakout
+
+**Status:** Accepted (2026-09-22)
+
+**Samsung PRO Endurance 32GB**, FAT32, on a 3.3V-native microSD breakout over
+SPI. Breakout for bench work; a soldered socket for the bike build.
+
+**The card is the decision, not the module.** Rated continuous-write endurance
+at 32GB spans roughly 7x between cards that are indistinguishable on a shelf -
+17,520 h for the Samsung PRO Endurance against 2,500 h for SanDisk's High
+Endurance, and *unrated* for generic consumer cards.
+
+Endurance is only half of it. **Consumer cards perform garbage collection on
+their own schedule, and that is precisely the 100 ms stall ADR-0002's whole
+architecture exists to absorb.** High-endurance cards, built for the dashcam
+workload this effectively is, make those stalls shorter and rarer. Buffering
+handles what remains; the card determines how much remains.
+
+**32GB, not larger:** cards above 32GB ship exFAT, and the ESP32 SD library's
+exFAT support is poor. 32GB is natively FAT32 and sidesteps it. Capacity is
+irrelevant anyway - at ~49 MB per riding hour, 32GB holds hundreds of hours.
+
+**SPI, not SD_MMC:** the requirement is ~14 KB/s and SPI delivers a hundred
+times that. Throughput was never the constraint; stall latency is, and that
+belongs to the card. **SD_MMC 4-bit is held in reserve** - pin-flexible on the
+S3, unlike the original ESP32 - should the format ever go binary at high rate.
+
+**Rejected:** generic 5V "Catalex"-style modules (trap #2 - their level
+shifters sit in an undefined region at 3.3V, giving intermittent mount failures
+that look like a bad card), and larger cards (exFAT, no benefit).
+
+**Wrong if:** the Phase 2 stall test shows high-endurance cards stall no less
+than consumer ones, making the premium pointless. Measure it - the claim here
+is from vendor ratings, not observation.
+
+---
+
+## ADR-0015: Power - battery feed, ignition-sensed, fused at the terminal
+
+**Status:** Accepted (2026-09-22)
+
+Permanent 12 V from the battery, fused at the terminal, gated by a high-side
+load switch driven from an ignition-sense line, through a protected 5 V 2 A
+buck converter.
+
+**Why not ignition-switched power alone** (which earlier drafts assumed):
+accessory circuits on a bike are often thin, shared, and not designed for
+another load. A fused feed straight from the battery is electrically cleaner
+and does not depend on someone else's circuit having headroom. The cost is that
+permanent power cannot be left unmanaged.
+
+**Why it cannot be left unmanaged:** at ~100 mA drawn from 12 V against the
+bike's OEM 8.6 Ah YTZ10S, the bike is **unlikely to crank after about 43 hours
+parked** and flat after ~86. That is not a corner case, it is an ordinary
+weekend. See [BIKE.md](BIKE.md).
+
+**The ignition-sense line resolves both.** One thin wire from a switched
+accessory circuit, divided to 3.3 V, does two jobs:
+
+1. Gates a high-side MOSFET - genuine zero draw when parked, not merely low
+2. Gives firmware **advance warning** to close the session before the rails
+   collapse, converting the expected shutdown from an interruption into an
+   orderly one
+
+**Rejected:** battery-only with firmware deep sleep (no extra wire, but the
+converter's own quiescent of 2-10 mA still drains the battery over months, and
+shutdown becomes inference from voltage and motion rather than a fact); a
+manual switch (zero drain, but a forgotten switch costs either a flat battery
+or a whole ride of data); tapping an ignition-switched circuit for the main
+feed (depends on unknown headroom in someone else's wiring).
+
+### Protection chain
+
+Fuse, reverse-polarity MOSFET, TVS clamp, bulk capacitance, load switch,
+converter. **The fuse is the one item with no substitute and belongs as close
+to the positive terminal as it will physically go** - everything downstream,
+including the wiring itself, is what it protects.
+
+### Holdup capacitance belongs on the 12 V side
+
+Energy stored is 1/2 C V^2, so the same joules cost far less capacitance at
+higher voltage. For ~50 mJ - enough to flush and close a file - roughly
+**1600 uF at 12 V versus 7800 uF at 5 V.** Nearly 5x less part for the same
+flush window, which is what makes **Q3 achievable with an ordinary electrolytic
+rather than a supercapacitor.**
+
+### Cranking
+
+Starting drags the supply to **6-8 V** briefly. The converter must tolerate it
+or ride through on the bulk cap. Worth testing deliberately: it is the same
+failure path as power loss, and it happens on every single ride.
+
+**Wrong if:** the bike has no accessory circuit that is switched and safe to
+tap, in which case fall back to firmware deep sleep and accept the quiescent
+drain.
+
+---
+
+## ADR-0016: Wheel-speed source after CAN was ruled out
+
+**Status:** **Deferred (2026-09-22)** — not decided. Options recorded; the
+choice is the owner's and has not been made.
+
+The target bike has **no CAN bus** ([BIKE.md](BIKE.md)), which retires
+ADR-0009's CAN path and ADR-0011's original wheel-speed source. What replaces
+it — if anything — is open.
+
+**ADR-0011's fusion math is unaffected either way.** It was written against a
+speed scalar, deliberately agnostic about its source. Only the source is in
+question, and GPS alone already satisfies the primary goals.
+
+### Options on the table
+
+**A — Fit a Hall-effect sensor to the front wheel.**
+Magnets on a rotor bolt circle, sensor bracketed to the fork.
+*For:* the front wheel is undriven, so it cannot spin up under power — removing
+drive slip, the largest error source ADR-0011 spends machinery detecting.
+Touches none of the bike's wiring. Slightly lower lean bias than the rear
+(+5.7% vs +6.4% at 45°). A few dollars, no protocol work.
+*Against:* the least mechanically robust part of the build — sensor and magnets
+live in road grime, spray and stone strike beside a brake disc. The front wheel
+locks under braking and leaves the ground under acceleration, neither
+hypothetical on this bike. Requires fabricating a bracket and drilling or
+clamping near brake hardware.
+
+**B — Tap the existing speedometer sensor.**
+*For:* already fitted, already weatherproofed, no new mechanical parts.
+*Against:* it reads countershaft speed — behind the clutch, ahead of final
+drive — so it is corrupted by rear wheel slip and changes meaning with
+sprockets. Requires splicing into existing wiring. Signal type unverified.
+
+**C — GPS speed only; no wheel source at all.**
+*For:* simplest possible build, nothing added to the bike, and it already meets
+the project's stated goals.
+*Against:* accepts dropouts under cover, 50–200 ms latency under braking, and
+10 Hz rather than something faster.
+
+**D — K-line from the DLC.**
+Effectively ruled out *for speed*: 10.4 kbaud request/response gives 5–10 Hz
+with latency, no better than GPS. Remains attractive for **engine** data
+(RPM, throttle, coolant) as a separate, unrelated path.
+
+### What would settle it
+
+Whether the added mechanical risk and fabrication buy enough over GPS-only to
+be worth it — which is partly a question about how much riding happens where
+GPS drops out, and partly about appetite for bracketry near the front brake.
+**Q8 tracks this.**
+
+---
+
+## ADR-0017: Magnetometer / 9-axis IMU — analysis, not yet a decision
+
+**Status:** **Deferred (2026-09-22)** — raised by the owner, analysed, not
+decided. Tracked as Q10 and Q11.
+
+Would a 9-axis IMU (accelerometer + gyro + magnetometer) shore up lean angle
+when GPS is unavailable?
+
+### The principle is sound — more so than it first appears
+
+A magnetometer measures **a world-fixed vector**. Unlike the accelerometer, it
+is *not* corrupted by cornering force — which is the entire reason the
+accelerometer cannot see steady-state lean (ADR-0010). At mid-latitudes
+magnetic inclination is steep (~60–70°), so the field has a large vertical
+component that projects strongly into the bike's roll plane. Rolling the
+machine rotates that projection measurably.
+
+**So lean is genuinely observable from a magnetometer, independent of GPS.**
+This is not a heading-only sensor being pressed into service; it is a second
+absolute attitude reference with a different failure mode from the first.
+
+### The practice on a motorcycle is the problem
+
+| Disturbance | Calibratable? |
+|---|---|
+| Steel engine, exhaust, fasteners (hard/soft iron) | **Yes** — constant in the sensor frame if rigidly mounted |
+| Ignition coils firing 50–100 ×/sec | No — time-varying |
+| Alternator under varying load, headlight, starter | No — time-varying |
+| Rebar, guardrails, structural steel, passing vehicles | No — external |
+
+**And the cruel part: tunnels, bridges, underpasses and urban canyons are full
+of structural steel. The magnetometer is least trustworthy in precisely the
+places GPS drops out.** The two sensors' worst cases coincide rather than
+complement — which is the opposite of what made the GPS/accelerometer pairing
+in ADR-0010 work.
+
+### Two distinct gaps, and this plugs the wrong one better
+
+- **Lean during dropout** — the missing input is *speed*, not heading. A
+  magnetometer attacks this only via the direct-roll-observation route above,
+  which is the disturbance-prone one.
+- **Heading / yaw** — currently unobservable without GPS and openly admitted as
+  such in [ARCHITECTURE.md](ARCHITECTURE.md). A magnetometer plugs this real
+  gap far more reliably, since heading tolerates noise that lean would not.
+
+### Cheaper things that address dropouts better
+
+1. **Propagate speed through short dropouts with longitudinal acceleration.**
+   `ax` is already logged. Integrating from the last good GPS speed drifts, but
+   a motorcycle cannot change speed arbitrarily fast, so over a 10–30 s tunnel
+   this is plausibly sufficient. **Software only, no new hardware.** This
+   should probably be done regardless of what Q10/Q11 decide.
+2. **A lower-drift gyro.** The MPU-6050 is old, and its bias drifts appreciably
+   with temperature — on a bike that goes from cold start to hot engine bay,
+   that is a live error source. A modern part drifts far less, shrinking
+   dropout error directly. Plausibly higher leverage than adding a
+   magnetometer. The schema already logs die temperature (`temp`), so the
+   correlation can be measured rather than assumed.
+3. **Resolving Q8** with a wheel-speed source — speed that never needs sky.
+
+### What would settle it
+
+Measurement, not argument. Log raw magnetometer data on the bike across a
+range of conditions — engine off, idling, revving, headlight on and off,
+through a tunnel — and see how much the field actually moves. That is cheap to
+do once a 9-axis part is on hand, and impossible to reason about in advance
+with any confidence.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -367,17 +687,16 @@ Ignition-off, a timeout after motion stops, or a button? Affects how many
 one-minute junk sessions accumulate from stop lights, and how aggressive
 power-loss handling must be. Phase 2.
 
-### Q3 — Is power-loss flush achievable?
+### Q3 - Is power-loss flush achievable?
 
-The plan is to sense the falling supply rail and flush using the buck
-converter's bulk capacitance. Whether there is enough energy for an SD flush is
-an empirical question about a specific converter. Untested and unverified.
+**Substantially answered by ADR-0015, pending measurement.** Two mechanisms now
+serve it: the ignition-sense line gives advance warning *before* the rails fall,
+and ~1600 uF on the 12 V side stores roughly 50 mJ of holdup - enough for about
+100 ms at 500 mW, on paper.
 
-### Q4 — Which ESP32 board variant?
-
-A plain WROOM devkit is assumed. An S3 has more RAM and native USB; a board
-with a battery connector changes the power design. Cheap to settle later, but
-it does affect the pin table.
+What remains is empirical: how long does an SD flush and file close actually
+take, and does the real converter hold regulation as its input decays? Measure
+in Phase 6, and size the capacitor from the measurement.
 
 ### Q5 — How much does tire width offset the lean estimate?
 
@@ -395,31 +714,64 @@ correction. It may be worth propagating speed forward using logged longitudinal
 acceleration between fixes. Do not build this speculatively — measure the error
 on a real session first. Phase 4.
 
-### Q7 — Does the bike expose usable wheel speed on CAN?
+### ~~Q7 — Does the bike expose usable wheel speed on CAN?~~ CLOSED
 
-**Gates all of ADR-0011.** Unknown and unverified. Needs answering in this
-order: which model and year; whether it has a CAN bus at all (pre-CAN bikes
-simply do not); where it can be tapped non-destructively (a diagnostic
-connector is far preferable to splicing); whether wheel speed appears on it;
-whether that value is raw or carries the speedometer's legally-mandated
-optimistic bias. Many markets require a speedo to never under-read, so dash
-speed typically runs high — whether the CAN value shares that bias must be
-measured against GPS, not assumed.
+**Answered: no.** The 2006 CBR600RR has no CAN bus — only a 4-pin K-line DLC.
+See [BIKE.md](BIKE.md) and ADR-0016.
 
-Until answered, treat CAN wheel speed as a design target, not a plan.
+### Q8 — Where does wheel speed come from, if anywhere?
 
-### Q8 — Front wheel, rear wheel, or both?
+**Reopened 2026-09-22 — deliberately deferred by the owner.** CAN is ruled out
+(Q7), but the replacement is undecided. Four options with their trade-offs are
+laid out in ADR-0016: a fitted front-wheel Hall sensor, tapping the existing
+speedometer sensor, GPS-only, or K-line.
 
-Front is the better ground-speed reference — it is undriven, so it does not
-spin up under power — but it locks under braking and reads zero during a
-wheelie. Rear is corrupted by drive slip but stays on the ground more. Both
-together make slip directly observable by divergence, which is the cheapest
-detector available. Depends on what the bus actually exposes (Q7).
+**Blocks:** Phase 9 in its entirety. Blocks nothing before it — GPS-only is a
+complete path through Phase 8, so this can stay open a long time.
+
+**Do not assume an answer in code.** ADR-0011's fusion already treats speed as
+a scalar from an unspecified source, which is what keeps this open at no cost.
+
+### Q10 — Is the MPU-6050 still the right sensor?
+
+Raised indirectly by ADR-0017. The GY-521/MPU-6050 was the project's starting
+assumption, not a comparison result. It is long in the tooth, is frequently
+counterfeited, and its gyro bias drifts with temperature — which matters on a
+machine that runs from ambient to engine-bay hot, and which directly sets how
+fast lean angle degrades during a GPS dropout.
+
+Modern alternatives (ICM-42688-P, BMI088, LSM6DSO) offer materially better bias
+stability for similar money. **Arguably higher leverage than adding a
+magnetometer**, since it improves the fallback path rather than adding a new
+one.
+
+**Interacts with Q1** — sensor count, placement and part number are one
+purchase decision. **Blocks nothing yet**; the source abstraction means the
+part can change without disturbing the architecture.
+
+### Q11 — Add a magnetometer (9-axis)?
+
+Analysed in ADR-0017. The principle is sound: a magnetometer is a world-fixed
+reference immune to the cornering force that defeats the accelerometer. The
+obstacle is disturbance from ignition, charging and surrounding steel — and its
+worst case coincides with GPS's rather than complementing it.
+
+**Settle by measurement, not argument:** log raw magnetometer data through
+engine off, idle, revving, lights on/off and a tunnel, and see how far the
+field actually moves. Cheap once the hardware is present.
+
+Note the smaller, separate case for it: **heading**, which the design currently
+cannot observe without GPS at all, and which tolerates far more noise than lean
+would.
 
 ### Q9 — Compensate rolling radius for lean angle?
 
-Wheel speed reads roughly 6% high at 45° of lean because the tire rolls on its
-shoulder. Gating adaptation to near-upright conditions avoids *learning* the
-wrong scale, but the fused speed is still biased while leaned. Compensating
-`r_eff` with the live lean estimate would correct it, at the cost of coupling
-two estimates that are currently independent. Needs real data to justify.
+Wheel speed reads high while leaned because the tyre rolls on its shoulder. For
+the CBR600RR's stock 120/70-17 front that is **+5.7% at 45°** (BIKE.md).
+Gating adaptation to near-upright conditions avoids *learning* the wrong scale,
+but fused speed is still biased while leaned. Compensating `r_eff` with the
+live lean estimate would correct it, at the cost of coupling two estimates that
+are currently independent.
+
+The `r_c` figure behind that number is estimated from tyre profile, not
+measured. Measure the actual front tyre crown arc before deciding.

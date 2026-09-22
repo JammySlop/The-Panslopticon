@@ -17,6 +17,7 @@ is the single failure this structure exists to prevent.
 | Finish or partly finish any work | `docs/STATUS.md` — always, every session |
 | Choose between real alternatives | `docs/DECISIONS.md` — add an ADR, don't bury the reasoning in a commit message |
 | Change wiring, pins, or parts | `docs/HARDWARE.md` — and check the pin table for conflicts |
+| Learn something about the bike itself | `docs/BIKE.md` — and mark how confident you are |
 | Change what gets logged or how | `docs/DATA-FORMAT.md` — and bump the schema version |
 | Change module structure or tasks | `docs/ARCHITECTURE.md` |
 | Complete a phase | `docs/ROADMAP.md` (tick it) and `docs/STATUS.md` (advance the phase) |
