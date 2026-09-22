@@ -37,18 +37,27 @@ too slow and too laggy to serve as a speed source.
 
 ### Battery
 
-**YTZ7S, 12 V, ~6 Ah** *(part number confirmed; capacity from Yuasa spec)*.
+**YTZ10S, 12 V, 8.6 Ah, ~190 CCA** *(fitted to this bike — confirmed by the
+owner)*. The stock part for the PC37 is the smaller YTZ7S (6 Ah); the YTZ10S is
+a capacity upgrade.
 
-Smaller than the 8–12 Ah assumed when ADR-0015 was written. Redoing that
-arithmetic at ~100 mA draw:
+Drain arithmetic at the logger's ~100 mA from 12 V:
 
-| | 8–12 Ah (assumed) | **6 Ah (actual)** |
+| | YTZ7S (stock, 6 Ah) | **YTZ10S (fitted, 8.6 Ah)** |
 |---|---|---|
-| To ~50% — likely won't crank | ~2 days | **~30 hours** |
-| To flat | ~4 days | ~60 hours |
+| To ~50% — likely won't crank | ~30 h | **~43 h (~1.8 days)** |
+| To flat | ~60 h | ~86 h (~3.6 days) |
 
-Just over a day parked. The ignition-sense line in ADR-0015 is not a nicety on
-this bike.
+Better than stock, and **still under two days before the bike won't start.**
+The conclusion is unchanged: ADR-0015's ignition-sense line is required, not a
+refinement.
+
+The extra ~60 CCA also means slightly less voltage sag while cranking, which
+marginally eases the 6–8 V brownout case — but not enough to design around.
+
+**Physical note:** the YTZ10S is larger than the YTZ7S it replaces. Confirm
+what space remains around the battery box before counting it as a mounting
+location.
 
 ### No wheel speed sensors
 

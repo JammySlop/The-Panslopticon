@@ -484,9 +484,11 @@ another load. A fused feed straight from the battery is electrically cleaner
 and does not depend on someone else's circuit having headroom. The cost is that
 permanent power cannot be left unmanaged.
 
-**Why it cannot be left unmanaged:** at ~100 mA drawn from 12 V against an
-8-12 Ah battery, the bike is **unlikely to crank after about two days parked**
-and flat after four. That is not a corner case, it is an ordinary week.
+**Why it cannot be left unmanaged:** at ~100 mA drawn from 12 V against the
+fitted 8.6 Ah YTZ10S, the bike is **unlikely to crank after about 43 hours
+parked** and flat after ~86. That is not a corner case, it is an ordinary
+weekend. (On the stock 6 Ah YTZ7S it would be ~30 hours — see
+[BIKE.md](BIKE.md).)
 
 **The ignition-sense line resolves both.** One thin wire from a switched
 accessory circuit, divided to 3.3 V, does two jobs:

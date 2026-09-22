@@ -107,11 +107,11 @@ reasoning in ADR-0015.
 
 ### Why the logger cannot simply sit on the battery
 
-Running draw is roughly 200 mA at 5 V, about **100 mA at 12 V**. Against a
-typical 8-12 Ah motorcycle battery:
+Running draw is roughly 200 mA at 5 V, about **100 mA at 12 V**. Against the
+bike's fitted 8.6 Ah YTZ10S ([BIKE.md](BIKE.md)):
 
-- **~2 days parked** - below ~50% charge, likely will not crank
-- ~4 days - flat
+- **~43 hours parked** - below ~50% charge, likely will not crank
+- ~86 hours - flat
 
 Hence the ignition-sense line. It is a thin wire from any switched accessory
 circuit, divided down to 3.3 V, doing two jobs: gating the high-side load
