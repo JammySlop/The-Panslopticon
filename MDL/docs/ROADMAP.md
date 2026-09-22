@@ -51,6 +51,8 @@ they should.
 - [ ] Motion-triggered session start; session end per Q2
 - [ ] Status LED: booting / idle / logging / error
 - [ ] **Stall test** — confirm a slow SD write does not disturb sample timing
+- [ ] Profile actual stall duration and frequency; size the buffer from that
+      measurement rather than a guess, and check the ADR-0014 endurance claim
 
 **Done when:** a bench session produces a valid CSV, pulling power mid-write
 loses only a bounded tail, and the timing test proves the decoupling works.

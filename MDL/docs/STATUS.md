@@ -21,7 +21,8 @@ datasheets and reasoning — **nothing has been measured on hardware.**
 Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
 - **ESP32-S3-DevKitC-1 (N16R8)** — settled, ADR-0012
-- GY-521 over I2C, microSD over SPI
+- GY-521 over I2C
+- **Samsung PRO Endurance 32GB** on a 3.3V SPI breakout, FAT32 - ADR-0014
 - **Drone-style u-blox M10 GPS**, read as UBX `NAV-PVT` at 10 Hz + PPS — ADR-0013
 - Log to SD during the ride, offload over a WiFi AP when parked
 - PlatformIO with the Arduino framework
@@ -80,6 +81,16 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 — Storage settled (ADR-0014)
+The card, not the breakout, is the decision: rated continuous-write endurance
+at 32GB spans ~7x between visually identical cards. Chose Samsung PRO
+Endurance 32GB. The deeper reason is stall behavior - consumer cards garbage
+collect on their own schedule, which *is* the 100 ms stall ADR-0002 exists to
+absorb. 32GB specifically, because larger cards ship exFAT and the ESP32 SD
+library handles it poorly. SPI over SD_MMC since throughput was never the
+constraint; SD_MMC 4-bit held in reserve. Phase 2 must measure real stall
+duration and check the endurance claim rather than trusting vendor ratings.
 
 ### 2026-09-22 — GPS settled (ADR-0013)
 Chose a potted drone-style u-blox M10 module: antenna integrated and built for

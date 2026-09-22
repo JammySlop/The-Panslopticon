@@ -12,7 +12,8 @@ electronics on a running motorcycle.
 |---|---|---|
 | MCU | **ESP32-S3-DevKitC-1 (N16R8)** | Dual core, WiFi, TWAI/CAN, 16MB flash, 8MB PSRAM, native USB. 3.3V logic, **not 5V tolerant**. See ADR-0012. |
 | IMU | GY-521 breakout (MPU-6050) | Count and placement still open — see [DECISIONS.md](DECISIONS.md#open-questions). |
-| Storage | microSD breakout, 3.3V native, SPI | See trap #2. Card: 8–32GB, FAT32, name-brand. |
+| Storage | 3.3V-native microSD breakout, SPI | Adafruit or SparkFun. See trap #2 and ADR-0014. |
+| Card | **Samsung PRO Endurance 32GB**, FAT32 | High-endurance class is the real decision — see below. |
 | GPS | **Drone-style u-blox M10 module** (Holybro M10 / Beitian class) | Antenna integrated and potted — built for vibration. 10 Hz, UBX capable. See ADR-0013. |
 | Power | 12V→5V buck converter, automotive rated | Plus protection — see trap #3. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
@@ -79,6 +80,51 @@ The MPU-6050's I2C address is set by the `AD0` pin: low = `0x68`, high = `0x69`.
 So two sensors share one bus with no extra hardware. A third needs either the
 ESP32's second I2C peripheral or a TCA9548A multiplexer. Worth knowing while
 the sensor-count question is still open.
+
+## Storage
+
+### The card matters far more than the breakout
+
+Continuous-write endurance at 32GB differs by roughly 7x across cards that
+look identical on a shelf:
+
+| Card | Rated continuous recording |
+|---|---|
+| **Samsung PRO Endurance 32GB** | **17,520 h** |
+| SanDisk Max Endurance 32GB | 15,000 h |
+| SanDisk High Endurance 32GB | 2,500 h |
+| Generic consumer card | unrated, and stalls unpredictably |
+
+A logger writing continuously in a vehicle is exactly the dashcam workload
+these cards exist for. Consumer cards are built for bursty camera use and do
+their garbage collection whenever they feel like it - which is the 100 ms stall
+the entire buffering architecture exists to absorb. A high-endurance card does
+not eliminate stalls, it makes them shorter and rarer.
+
+### Why SPI, and the escape hatch
+
+SPI needs four pins and is trivially reliable. The requirement is ~14 KB/s;
+SPI comfortably delivers a hundred times that, so throughput is not the
+constraint - stall latency is, and that is a property of the card, not the bus.
+
+The ESP32-S3 also supports **SD_MMC in 4-bit mode**, which is far faster and
+pin-flexible on the S3 (unlike the original ESP32's fixed pins). Held in
+reserve: if the log format ever moves to binary at high rate, or a stall
+profile turns out to need deeper pipelining, it is available for two more
+pins. Not needed now.
+
+### Wiring notes
+
+- **Format FAT32.** The ESP32 SD library's exFAT support is poor, and cards
+  above 32GB ship exFAT by default. 32GB avoids the whole question.
+- **Decoupling capacitance at the socket.** Cards draw 100-200 mA bursts while
+  writing. Without local bulk capacitance this browns out the 3.3V rail and
+  produces "random" resets that look like firmware bugs. 10 uF plus 100 nF.
+- **Keep SPI runs short.** Long dupont leads cause mount failures that look
+  exactly like a bad card. Start at 4 MHz, raise once stable.
+- **Vibration:** a push-push socket can lose contact on a bike. Bench work on a
+  breakout is fine; the final build wants a soldered socket, strain-relieved
+  (trap #4).
 
 ## GPS configuration
 

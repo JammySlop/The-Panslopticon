@@ -433,6 +433,43 @@ into Q1's mounting plan.
 
 ---
 
+## ADR-0014: Storage - high-endurance card on a 3.3V SPI breakout
+
+**Status:** Accepted (2026-09-22)
+
+**Samsung PRO Endurance 32GB**, FAT32, on a 3.3V-native microSD breakout over
+SPI. Breakout for bench work; a soldered socket for the bike build.
+
+**The card is the decision, not the module.** Rated continuous-write endurance
+at 32GB spans roughly 7x between cards that are indistinguishable on a shelf -
+17,520 h for the Samsung PRO Endurance against 2,500 h for SanDisk's High
+Endurance, and *unrated* for generic consumer cards.
+
+Endurance is only half of it. **Consumer cards perform garbage collection on
+their own schedule, and that is precisely the 100 ms stall ADR-0002's whole
+architecture exists to absorb.** High-endurance cards, built for the dashcam
+workload this effectively is, make those stalls shorter and rarer. Buffering
+handles what remains; the card determines how much remains.
+
+**32GB, not larger:** cards above 32GB ship exFAT, and the ESP32 SD library's
+exFAT support is poor. 32GB is natively FAT32 and sidesteps it. Capacity is
+irrelevant anyway - at ~49 MB per riding hour, 32GB holds hundreds of hours.
+
+**SPI, not SD_MMC:** the requirement is ~14 KB/s and SPI delivers a hundred
+times that. Throughput was never the constraint; stall latency is, and that
+belongs to the card. **SD_MMC 4-bit is held in reserve** - pin-flexible on the
+S3, unlike the original ESP32 - should the format ever go binary at high rate.
+
+**Rejected:** generic 5V "Catalex"-style modules (trap #2 - their level
+shifters sit in an undefined region at 3.3V, giving intermittent mount failures
+that look like a bad card), and larger cards (exFAT, no benefit).
+
+**Wrong if:** the Phase 2 stall test shows high-endurance cards stall no less
+than consumer ones, making the premium pointless. Measure it - the claim here
+is from vendor ratings, not observation.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
