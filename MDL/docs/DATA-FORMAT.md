@@ -36,7 +36,11 @@ it is greppable, and a half-written file is still usable (ADR-0006).
 | `temp` | °C | MPU-6050 die temperature. Not ambient; useful for drift correlation. |
 | `fix` | 0/1 | GPS has a valid fix |
 | `lat`, `lon` | ° | WGS84, 7 decimal places (~1 cm — well past what the receiver delivers, but cheap) |
-| `spd` | m/s | Speed over ground |
+| `vgps` | m/s | GPS Doppler speed over ground. Raw, never fused. |
+| `vwhl` | m/s | Wheel speed as reported on CAN. Raw, uncorrected. Empty if no CAN. |
+| `vfus` | m/s | **Fused speed** — what orientation fusion actually used (ADR-0011) |
+| `vsrc` | enum | `0` none, `1` GPS only, `2` wheel only, `3` both fused |
+| `kwhl` | ratio | Current wheel scale-factor estimate. A diagnostic: drift here means tire wear, pressure change, or a bad gate. |
 | `crs` | ° | Course over ground, 0–360. Meaningless at a standstill. |
 | `sats` | count | Satellites used |
 | `gage` | ms | Age of the GPS fix at this row. `0` means this row carries a fresh fix. |
@@ -44,9 +48,9 @@ it is greppable, and a half-written file is still usable (ADR-0006).
 Example:
 
 ```csv
-t_ms,ax,ay,az,gx,gy,gz,roll,pitch,fmode,temp,fix,lat,lon,spd,crs,sats,gage
-12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,1,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,40
-12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,1,31.4,1,39.7392000,-104.9903000,22.4,178.2,9,50
+t_ms,ax,ay,az,gx,gy,gz,roll,pitch,fmode,temp,fix,lat,lon,vgps,vwhl,vfus,vsrc,kwhl,crs,sats,gage
+12500,0.021,-0.412,0.908,1.2,-0.4,15.7,-24.3,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.71,22.43,3,0.9448,178.2,9,40
+12510,0.019,-0.418,0.905,0.9,-0.3,16.1,-24.5,1.8,1,31.4,1,39.7392000,-104.9903000,22.40,23.75,22.47,3,0.9448,178.2,9,50
 ```
 
 ### Why `fmode` exists, and why `roll` is not the whole story
@@ -57,6 +61,11 @@ the accelerometer (ADR-0010). When GPS drops out, or the bike is below about
 The fallback is *recorded, not hidden* — `fmode` says which regime produced
 every single row, so analysis can weight or discard accordingly instead of
 silently comparing values of different quality.
+
+Note in the example rows that `vwhl` reads high against `vgps` — the bike is
+leaned ~24°, so the tire is rolling on its shoulder at a reduced radius, and
+`kwhl` below 1.0 is the estimator compensating. Logging the scale factor makes
+that visible rather than buried inside the filter.
 
 `roll` is the **force-vector angle**: the tilt of combined gravity and
 cornering force. Actual chassis lean is a few degrees greater, because the
@@ -110,10 +119,16 @@ Any tool reading these files must:
    absent, and may jump when the first fix arrives.
 4. **Never assume rows are evenly spaced.** They should be, but a dropped sample
    is possible; use `t_ms` deltas rather than row index × period.
+5. **Use `vfus` for analysis, `vgps`/`vwhl` for diagnosis.** The raw inputs are
+   logged so a fusion bug can be found — and so speed can be re-fused offline
+   with a better filter — but they are not the answer to "how fast was I going".
+6. **Respect the mode flags.** `fmode` and `vsrc` mark rows produced by degraded
+   fallbacks. Comparing them against full-quality rows without weighting is the
+   easiest way to draw a confident wrong conclusion from this data.
 
 ## Size
 
-About 112 bytes per row at 100 Hz ≈ 11 KB/s ≈ **40 MB per riding hour**. A 32GB
+About 135 bytes per row at 100 Hz ≈ 14 KB/s ≈ **49 MB per riding hour**. A 32GB
 card holds hundreds of hours. Storage is not a constraint; write *throughput*
 during a stall is the thing to watch.
 

@@ -175,6 +175,11 @@ one transceiver chip. But reading a specific motorcycle's bus means identifying
 its message IDs and scaling factors, which is reverse engineering with its own
 timeline and is not a prerequisite for lean angle or braking data.
 
+**Update (2026-09-22):** ADR-0011 gives CAN a concrete first target — wheel
+speed, to improve the speed estimate that lean angle depends on. That raises
+its value above "engine data would be interesting", but does not make it a
+prerequisite. Still sequenced after the GPS-only path works end to end.
+
 ---
 
 ## ADR-0010: GPS speed aids the orientation estimate (centripetal correction)
@@ -242,6 +247,93 @@ drift. It can, and more directly than by correcting the drift itself.
 
 ---
 
+## ADR-0011: Speed fusion — GPS Doppler plus CAN wheel speed
+
+**Status:** Proposed (2026-09-22) — designed now, built in Phase 9
+
+Speed becomes its own fusion stage feeding orientation fusion (ADR-0010),
+combining GPS Doppler speed with wheel speed read from the bike's CAN bus.
+
+**Why not just pick one:** they are good at opposite things. GPS is unbiased
+but slow, laggy, and occasionally absent. Wheel speed is fast and always
+present but carries a scale error from rolling radius. Averaging them yields
+the worst of both — GPS's lag *and* the wheel's bias.
+
+**The approach — estimate the bias, then use the quiet sensor:**
+
+```
+v ≈ k · v_wheel          k = slowly-varying scale factor, learned from GPS
+```
+
+GPS continuously corrects `k`; the fused output then runs at wheel rate and
+wheel latency with GPS-grade accuracy. `k` adapts on a time constant of tens of
+seconds, because rolling radius changes with tire wear, pressure and
+temperature — over hours, not milliseconds. **A fast-adapting `k` would absorb
+genuine wheel slip as "scale change" and hide exactly the events worth seeing.**
+
+### Gating: when it is safe to learn `k`
+
+Adaptation runs only when all hold. Otherwise `k` is frozen and simply used.
+
+| Condition | Threshold (provisional) | Reason |
+|---|---|---|
+| GPS fix quality | sats ≥ 6, HDOP low | A bad fix teaches the wrong scale |
+| Speed | > 5 m/s | GPS speed is noisy near standstill |
+| Lean | \|θ\| < 10° | Avoids the lean/rolling-radius coupling |
+| Longitudinal accel | small | Drive slip and braking slip both corrupt wheel speed |
+| ABS / traction control | inactive, if CAN reports it | Explicit slip signal, free if available |
+
+### Latency compensation
+
+A GPS fix is 50–200 ms old on arrival. It must be compared against the fused
+estimate *as it was at the fix's timestamp*, not the current one — which means
+keeping a short ring buffer of past estimates and correcting retrospectively.
+Without this, every hard braking or acceleration event injects a correction
+error proportional to how fast speed was changing.
+
+### Degradation ladder
+
+Speed estimation is expected to lose inputs, and says so rather than hiding it:
+
+| Available | Behavior | `vsrc` |
+|---|---|---|
+| GPS + wheel | Full fusion, `k` adapting when gated conditions allow | `3` |
+| Wheel only (tunnel) | `k · v_wheel` with the last learned `k`, frozen | `2` |
+| GPS only (no CAN, or bus fault) | GPS speed carried forward, as today | `1` |
+| Neither | Orientation fusion falls back to IMU-only | `0` |
+
+### Slip and lift detection
+
+Wheel speed lies in specific, detectable ways. These are logged as events, not
+silently smoothed away — a rider *wants* to see wheelspin and stoppies:
+
+- **Drive slip** — wheel acceleration far exceeds longitudinal accelerometer
+  reading. Cross-check against the IMU, which cannot be fooled by a spinning
+  wheel.
+- **Lock-up / ABS** — wheel decelerates faster than physically plausible.
+- **Wheelie** — front wheel speed collapses while the accelerometer and rear
+  wheel disagree. A front-wheel-only feed is worthless here.
+- **Front vs rear divergence** — the cheapest slip detector of all, available
+  free if the bus exposes both.
+
+### Cost and honesty
+
+This is a meaningful chunk of work: CAN reverse engineering, a scale estimator,
+a gating state machine, a latency buffer, and slip detection. **GPS alone is
+sufficient for the project's primary goals.** The gains are no dropouts, lower
+latency under braking (bearing on Q6), and higher rate. That is an upgrade, not
+a prerequisite, and it is sequenced accordingly.
+
+**Depends entirely on:** the bike exposing usable wheel speed on a readable
+bus (Q7), which is unverified.
+
+**Rejected:** using wheel speed *instead* of GPS (inherits an unbounded,
+unobservable scale error), and a fixed calibration constant instead of an
+online estimate (correct on the day it is measured, wrong as the tire wears —
+and silently so).
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -297,3 +389,32 @@ hard braking, speed is changing fast enough that a stale value biases the
 correction. It may be worth propagating speed forward using logged longitudinal
 acceleration between fixes. Do not build this speculatively — measure the error
 on a real session first. Phase 4.
+
+### Q7 — Does the bike expose usable wheel speed on CAN?
+
+**Gates all of ADR-0011.** Unknown and unverified. Needs answering in this
+order: which model and year; whether it has a CAN bus at all (pre-CAN bikes
+simply do not); where it can be tapped non-destructively (a diagnostic
+connector is far preferable to splicing); whether wheel speed appears on it;
+whether that value is raw or carries the speedometer's legally-mandated
+optimistic bias. Many markets require a speedo to never under-read, so dash
+speed typically runs high — whether the CAN value shares that bias must be
+measured against GPS, not assumed.
+
+Until answered, treat CAN wheel speed as a design target, not a plan.
+
+### Q8 — Front wheel, rear wheel, or both?
+
+Front is the better ground-speed reference — it is undriven, so it does not
+spin up under power — but it locks under braking and reads zero during a
+wheelie. Rear is corrupted by drive slip but stays on the ground more. Both
+together make slip directly observable by divergence, which is the cheapest
+detector available. Depends on what the bus actually exposes (Q7).
+
+### Q9 — Compensate rolling radius for lean angle?
+
+Wheel speed reads roughly 6% high at 45° of lean because the tire rolls on its
+shoulder. Gating adaptation to near-upright conditions avoids *learning* the
+wrong scale, but the fused speed is still biased while leaned. Compensating
+`r_eff` with the live lean estimate would correct it, at the cost of coupling
+two estimates that are currently independent. Needs real data to justify.

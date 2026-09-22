@@ -53,19 +53,33 @@ angle on a motorcycle is not computable from the IMU alone. See "Centripetal
 correction" below. This is the only place where two sources are coupled, and it
 is coupled through a single scalar (speed), not a general dependency.
 
+Fusion happens in two stages, because speed is itself an estimate before it is
+an input:
+
 ```
- IMU ──┬──────────────────────────────▶ (raw channels straight to the bus)
+ IMU ──┬─────────────────────────────────────────▶ raw channels ──▶ bus
        │
-       └──▶ ┌─────────────────┐
-            │ orientation     │──▶ roll, pitch ──▶ bus
- GPS ──speed▶│ fusion          │
-       │    └─────────────────┘
-       └──────────────────────────────▶ (position channels to the bus)
+       │  ┌───────────────┐
+ GPS ──┼─▶│ speed fusion  │── v_fused ──┐
+       │  │  (ADR-0011)   │             │
+ CAN ──┼─▶│               │             ▼
+ wheel │  └───────────────┘   ┌──────────────────┐
+       │         │            │ orientation      │──▶ roll, pitch ──▶ bus
+       └─────────┼───────────▶│ fusion (ADR-0010)│
+                 │            └──────────────────┘
+                 └─── v_fused, source flag, scale factor ────────────▶ bus
+ GPS ────────────────────────────────── position channels ──────────▶ bus
 ```
 
-Raw accelerometer and gyro values are always logged alongside the fused output,
-so a different filter can be evaluated later against an already-recorded ride
-rather than needing a new one.
+**Stage 1 — speed fusion** reconciles GPS Doppler speed with CAN wheel speed
+into one best estimate. **Stage 2 — orientation fusion** consumes that estimate
+to remove centripetal acceleration from the accelerometer. Stage 2 does not
+care where speed came from, which is what lets CAN be added later without
+touching it.
+
+Raw accelerometer, gyro, and *both* speed inputs are always logged alongside
+the fused outputs, so a different filter can be evaluated later against an
+already-recorded ride rather than needing a new one.
 
 ## Tasks and cores
 
@@ -223,9 +237,59 @@ inputs and resolve the offset empirically — it depends on the specific tire.
 **Consequence for the architecture:** GPS is an *input to fusion*, not only a
 sink-bound channel. Speed must reach the orientation filter inside the sampler
 path. Fusion degrades gracefully when it is absent and records which mode it
-was in. A wheel-speed source over CAN would be strictly better — higher rate,
-no dropouts, no latency — and is the strongest argument for adding CAN later
-(ADR-0009).
+was in.
+
+## Speed estimation
+
+Orientation fusion needs speed. Where that speed comes from is deliberately its
+own problem, solved one stage earlier (ADR-0011), because the two available
+sources are good at opposite things:
+
+| | GPS Doppler | CAN wheel speed |
+|---|---|---|
+| Absolute accuracy | ~0.05 m/s, **no scale error** | Biased by rolling radius |
+| Rate | 10 Hz | 50–100 Hz typical |
+| Latency | 50–200 ms | ~10–20 ms |
+| Availability | Lost in tunnels, tree cover, canyons | Always present |
+| Fails when | No sky view | Wheel slips, locks, or leaves the ground |
+
+GPS is the **truth reference** — slow and occasionally absent, but unbiased.
+Wheel speed is the **fast local signal** — immediate and always there, but wrong
+by a scale factor that depends on tire wear, pressure, and fitment.
+
+So: use GPS to continuously estimate the scale factor `k` in `v ≈ k · v_wheel`,
+then run at wheel rate and wheel latency with GPS-grade accuracy. Averaging the
+two would be the wrong move — it inherits GPS's lag *and* the wheel's bias.
+
+### The lean-angle coupling
+
+A leaned bike rolls on the tire's shoulder rather than its crown, and the
+shoulder has a smaller radius:
+
+```
+r_eff = R − r_c·(1 − cos θ)      R = crown rolling radius
+                                 r_c = carcass cross-section radius
+                                 θ = lean angle
+```
+
+For a typical rear tire (R ≈ 0.31 m, r_c ≈ 0.06 m) at 45° of lean, the
+effective radius falls about 5.7%, so wheel speed reads roughly **6% high**.
+*(Geometric derivation, not measured.)*
+
+This matters more than its size suggests: the error is a function of lean
+angle, which is precisely the quantity being estimated from that speed. It does
+not destabilize anything — lean never feeds back into speed — but it is a
+systematic bias correlated with the measurand, which is the variety that hides
+inside plausible-looking data.
+
+Two defenses, in order of cost: only adapt `k` while the bike is near upright,
+and optionally compensate `r_eff` directly using the lean estimate already
+available. The second is a refinement; the first is mandatory.
+
+**A wheel-speed source is therefore not a drop-in replacement for GPS — it is a
+different sensor with different failure modes, and both are kept.** This is the
+strongest argument for adding CAN (ADR-0009), but it does not remove the need
+for GPS.
 
 ## Power loss
 

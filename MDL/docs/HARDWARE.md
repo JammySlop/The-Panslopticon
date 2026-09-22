@@ -17,8 +17,17 @@ electronics on a running motorcycle.
 | Power | 12V→5V buck converter, automotive rated | Plus protection — see trap #3. |
 | Enclosure | Sealed, vibration-isolated | Phase 6 concern, but decide mounting early (it affects axis conventions). |
 
-Future, not yet specified: CAN transceiver (SN65HVD230 or TJA1051T/3), brake
-pressure transducer, clutch switch tap, display.
+Future, not yet specified: brake pressure transducer, clutch switch tap,
+display.
+
+**CAN transceiver** (SN65HVD230 or TJA1051T/3) has a concrete purpose now —
+wheel speed for the speed estimate (ADR-0011), not just eventual engine data.
+The ESP32's TWAI controller does the protocol work, so the transceiver is the
+only part needed. Choose a **3.3V** part: the SN65HVD230 runs natively at 3.3V,
+while many common CAN breakouts are 5V and reintroduce trap #1. Tap the bus at
+a diagnostic connector where possible rather than splicing into harness wiring
+— a motorcycle's CAN bus carries braking and engine management, and a bad
+splice there is a safety issue, not just a data one.
 
 ## Pin budget
 

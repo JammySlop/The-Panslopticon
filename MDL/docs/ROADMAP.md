@@ -139,5 +139,41 @@ are additive.
 - [ ] Clutch switch — digital source, debounced
 - [ ] Brake pressure — analog source on ADC1, needs a transducer and calibration
 - [ ] Onboard display — a sink showing live values and session state
-- [ ] CAN / TWAI — transceiver plus reverse-engineering the bike's message IDs (ADR-0009)
 - [ ] Second IMU, if Q1 resolves that way
+
+CAN has outgrown this list and has its own phase below.
+
+---
+
+## Phase 9 — CAN wheel speed and speed fusion
+
+Designed in ADR-0011, built here. **Entirely gated on Q7** — whether the bike
+exposes usable wheel speed on a readable bus. Answer that before any of the
+rest, because a negative answer ends the phase.
+
+*Reconnaissance*
+- [ ] Identify the bike, confirm it has CAN, find a non-destructive tap point
+- [ ] SN65HVD230 (or TJA1051T/3) transceiver on the reserved TWAI pins
+- [ ] Passive sniff: log raw frames to the card, ride, then analyze offline
+- [ ] Identify the wheel-speed message ID, byte layout, scaling and endianness
+- [ ] Determine whether the value carries the speedo's optimistic bias —
+      measure against GPS, do not assume
+- [ ] Settle Q8: is front, rear, or both available?
+
+*Fusion*
+- [ ] `CanSource` decoding wheel speed into the sample bus
+- [ ] Online scale-factor estimator for `k`, logged as `kwhl`
+- [ ] Gating state machine — fix quality, speed, lean, accel, ABS/TC
+- [ ] Latency compensation via a ring buffer of past estimates
+- [ ] Degradation ladder with `vsrc` logged per row
+- [ ] Slip, lock-up and wheelie detection by cross-checking against the IMU
+
+*Validation*
+- [ ] Confirm `k` converges and then stays put over a ride
+- [ ] Confirm tunnel or tree-cover transitions are seamless in `vfus`
+- [ ] Compare lean angle from GPS-only against fused speed on the same session
+- [ ] Decide Q9: is lean-angle rolling-radius compensation worth the coupling?
+
+**Done when:** speed is continuous and accurate through GPS dropouts, `k` is
+stable, and the lean estimate measurably improves under braking — verified
+against a recorded session, not impressions.

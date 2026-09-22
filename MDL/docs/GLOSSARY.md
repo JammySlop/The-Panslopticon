@@ -106,6 +106,36 @@ accurate, and far more trustworthy than the same receiver's position.
 bound the drift of an inertial system. What ADR-0010 is a narrow, cheap
 instance of.
 
+**Scale factor** — A multiplicative correction between what a sensor reports
+and the truth. Wheel speed has one (rolling radius); GPS speed does not. A
+noisy-but-unbiased sensor can teach a quiet-but-biased one its scale factor,
+which is the whole idea behind ADR-0011.
+
+**Rolling radius** — The effective radius converting wheel rotation into
+distance travelled. Not a constant: it shrinks with tire wear and pressure
+loss, and shrinks *with lean angle* on a motorcycle, because the bike rides on
+the tire's smaller-radius shoulder. `r_eff = R − r_c(1 − cos θ)`.
+
+**Wheel slip** — Any mismatch between wheel rotation and ground speed: spin
+under power, lock under braking. Makes wheel speed briefly fiction, which is
+why the IMU is used to cross-check it.
+
+**ABS / traction control** — Systems that modulate braking or power at the edge
+of grip. Both indicate slip is happening. If the bus reports their state, it is
+a free and authoritative slip flag.
+
+**Gating** — Only updating an estimate when conditions make it trustworthy.
+Here, the wheel scale factor adapts solely when the bike is upright, at speed,
+not slipping, and GPS is healthy — and is otherwise frozen and used as-is.
+
+**Latency compensation** — Correcting an estimate using a measurement that
+describes a moment already past. Requires keeping a short history to compare
+against, rather than applying an old measurement to the present.
+
+**HDOP** — Horizontal Dilution of Precision. A measure of how favorably the
+visible satellites are arranged. Low is good; a high value means the fix is
+geometrically weak even with plenty of satellites.
+
 **Dead reckoning** — Estimating position from heading and speed when GPS is
 unavailable. Drifts quickly; mentioned here only to note it is *not* being done.
 
