@@ -10,7 +10,7 @@ electronics on a running motorcycle.
 
 | Part | Choice | Notes |
 |---|---|---|
-| MCU | ESP32-WROOM-32 devkit (30 or 38 pin) | Dual core, WiFi, built-in CAN controller. 3.3V logic, **not 5V tolerant**. |
+| MCU | **ESP32-S3-DevKitC-1 (N16R8)** | Dual core, WiFi, TWAI/CAN, 16MB flash, 8MB PSRAM, native USB. 3.3V logic, **not 5V tolerant**. See ADR-0012. |
 | IMU | GY-521 breakout (MPU-6050) | Count and placement still open — see [DECISIONS.md](DECISIONS.md#open-questions). |
 | Storage | microSD breakout, 3.3V native, SPI | See trap #2. Card: 8–32GB, FAT32, name-brand. |
 | GPS | u-blox NEO-M8N (or NEO-6M) | M8N does 10Hz; the 6M is 1–5Hz and cheaper. Phase 4. |
@@ -37,29 +37,40 @@ change one, change the other.
 
 | Pin | Use | Notes |
 |---|---|---|
-| GPIO21 | I2C SDA | Default ESP32 I2C pins |
-| GPIO22 | I2C SCL | Shared by all IMUs and any future I2C device |
-| GPIO18 | SD SCK | VSPI |
-| GPIO19 | SD MISO | VSPI |
-| GPIO23 | SD MOSI | VSPI |
-| GPIO5 | SD CS | Strapping pin, must be high at boot — SPI CS idles high, so OK |
-| GPIO16 | GPS RX (ESP32 ← GPS TX) | UART2 |
-| GPIO17 | GPS TX (ESP32 → GPS RX) | UART2 |
-| GPIO2 | Status LED | Onboard LED on most devkits |
-| GPIO4 | Offload button | Input, pull-up, debounced |
-| GPIO25 | *reserved* CAN TX | TWAI is remappable; these are convention |
-| GPIO26 | *reserved* CAN RX | |
-| GPIO27 | *reserved* clutch switch | Digital in, pull-up |
-| GPIO34 | *reserved* brake pressure | **ADC1**, input-only, no internal pull-up |
-| GPIO35 | *reserved* supply voltage sense | ADC1, via divider — for power-loss detection |
+| GPIO17 | I2C SDA | Shared by all IMUs and any future I2C device |
+| GPIO18 | I2C SCL | |
+| GPIO12 | SD SCK | SPI |
+| GPIO11 | SD MOSI | |
+| GPIO13 | SD MISO | |
+| GPIO14 | SD CS | |
+| GPIO16 | GPS RX (ESP32 ← GPS TX) | UART1 |
+| GPIO15 | GPS TX (ESP32 → GPS RX) | UART1 |
+| GPIO48 | Status LED | Onboard addressable RGB on the DevKitC-1 |
+| GPIO47 | Offload button | Input, pull-up, debounced. The onboard BOOT button on GPIO0 is a fallback. |
+| GPIO41 | *reserved* CAN TX | TWAI is remappable; these are convention |
+| GPIO42 | *reserved* CAN RX | |
+| GPIO40 | *reserved* clutch switch | Digital in, pull-up |
+| GPIO4 | *reserved* brake pressure | **ADC1** |
+| GPIO5 | *reserved* supply voltage sense | ADC1, via divider — for power-loss detection |
 
-**Avoid:** GPIO6–11 (connected to the internal flash — using them bricks the
-boot), GPIO12 (strapping pin, must be LOW at boot; pulling it high stops the
-board booting).
+**Avoid on the ESP32-S3:**
 
-**ADC1 vs ADC2:** ADC2 pins stop working while WiFi is active. Every analog
-input above is on ADC1 (GPIO32–39) for that reason. This is not optional — it
-is a silicon limitation, not a driver bug.
+| Pins | Why |
+|---|---|
+| GPIO26–32 | SPI flash. Using them stops the board booting. |
+| **GPIO35, 36, 37** | **Consumed by octal PSRAM on the N16R8.** Free on paper, unusable in practice — the single most common S3 pin-budget mistake. |
+| GPIO19, 20 | Native USB D− / D+. Available only if USB is given up. |
+| GPIO43, 44 | UART0 — the serial console. |
+| GPIO45, 46 | Strapping pins; GPIO46 is additionally input-only. |
+| GPIO22–25 | Do not exist on the S3. |
+
+**ADC1 vs ADC2:** ADC2 stops working while WiFi is active. On the S3, **ADC1 is
+GPIO1–10** (not GPIO32–39 as on the original ESP32), so every analog input above
+sits there. Silicon limitation, not a driver bug.
+
+> **This table changed wholesale when the board was settled (ADR-0012).** Pin
+> numbering does not carry over from the original ESP32 — anything written
+> against the old table is wrong.
 
 ### Two GY-521s on one bus
 

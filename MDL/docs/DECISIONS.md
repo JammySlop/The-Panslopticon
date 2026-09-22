@@ -334,6 +334,58 @@ and silently so).
 
 ---
 
+## ADR-0012: ESP32-S3-DevKitC-1 (N16R8) as the board
+
+**Status:** Accepted (2026-09-22) — settles Q4
+
+**Hard requirements filtered the field fast.** Dual core (ADR-0002's
+sampler/writer split), WiFi (ADR-0003 offload), and TWAI/CAN (ADR-0011) between
+them eliminate the S2, C3 and C6 (single core) and the H2 and P4 (no WiFi).
+That leaves the original ESP32 and the S3.
+
+| | ESP32-WROOM-32 DevKitC | **ESP32-S3-DevKitC-1 N16R8** |
+|---|---|---|
+| Cost | ~$6.50 | ~$8–15 |
+| Cores | 2 × LX6 @ 240MHz | 2 × LX7 @ 240MHz |
+| PSRAM | none (~320KB usable SRAM) | **8 MB** |
+| USB | CH340/CP2102 bridge chip | **native** |
+| CAN / TWAI | yes | yes |
+| Ecosystem | most examples, oldest | the 2026 default recommendation |
+
+**Why the S3, for this project specifically:**
+
+1. **PSRAM is the deciding factor.** The bottleneck here is not compute, it is
+   surviving an SD card that disappears for 100 ms without dropping samples.
+   Buffer depth is the entire defense, and it is the one thing the original
+   ESP32 cannot scale — 8 MB buys buffering measured in seconds rather than
+   milliseconds. This is ADR-0002's whole premise, made robust.
+2. **Native USB removes the bridge chip** — one fewer component to shake loose
+   on a vibrating frame, and it opens USB mass-storage as a second offload path
+   beside WiFi.
+3. Cost difference is a few dollars against a build that will cost far more in
+   connectors and enclosure.
+
+**Costs accepted:**
+
+- **PlatformIO friction.** Espressif and PlatformIO fell out, and the official
+  `platform-espressif32` stalled at Arduino core 2.x. Core 3.x lives in the
+  community [`pioarduino` fork](https://github.com/pioarduino/platform-espressif32).
+  The S3 does work on the official platform; the fork is where maintenance
+  actually happens. Decide in Phase 1 and pin it in `platformio.ini`.
+- **The pin table was rewritten, not adjusted.** S3 numbering does not map onto
+  the original ESP32's — ADC1 is GPIO1–10, and native USB occupies GPIO19/20,
+  which previously held SD MISO.
+- **Octal PSRAM eats GPIO35–37.** They look free and are not.
+
+**Rejected:** the original ESP32 (cheapest and best-documented, but RAM caps
+buffer depth and the UART bridge is an extra failure point), and buying both to
+decide later (defers a decision that the buffering argument already settles).
+
+**Wrong if:** the SD stall test in Phase 2 shows modest buffers suffice and
+PSRAM goes unused, at which point the original ESP32 becomes the cheaper equal.
+
+---
+
 # Open questions
 
 Unresolved. Do not quietly answer one of these in code — raise it, or write the
@@ -372,12 +424,6 @@ power-loss handling must be. Phase 2.
 The plan is to sense the falling supply rail and flush using the buck
 converter's bulk capacitance. Whether there is enough energy for an SD flush is
 an empirical question about a specific converter. Untested and unverified.
-
-### Q4 — Which ESP32 board variant?
-
-A plain WROOM devkit is assumed. An S3 has more RAM and native USB; a board
-with a battery connector changes the power design. Cheap to settle later, but
-it does affect the pin table.
 
 ### Q5 — How much does tire width offset the lean estimate?
 

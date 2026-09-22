@@ -20,7 +20,8 @@ datasheets and reasoning — **nothing has been measured on hardware.**
 
 Settled so far (details in [DECISIONS.md](DECISIONS.md)):
 
-- ESP32 + GY-521 over I2C, microSD over SPI, GPS over UART
+- **ESP32-S3-DevKitC-1 (N16R8)** — settled, ADR-0012
+- GY-521 over I2C, microSD over SPI, GPS over UART
 - Log to SD during the ride, offload over a WiFi AP when parked
 - PlatformIO with the Arduino framework
 - Source → bus → sink architecture, sampler and writer on separate cores
@@ -49,7 +50,6 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 | Q1 | How many IMUs, where, and for what? Deferred by the owner. | Wiring, schema width, sample rate, **axis conventions, end of Phase 1** |
 | Q2 | What ends a session? | Phase 2 |
 | Q3 | Is a power-loss flush achievable? | Phase 6 |
-| Q4 | Which ESP32 board variant? | Pin table |
 | Q5 | How much does tire width offset the lean estimate? | Analysis accuracy |
 | Q6 | Does GPS speed latency need compensating? | Phase 4 |
 | Q7 | Does the bike expose usable wheel speed on CAN? | **All of Phase 9** |
@@ -79,6 +79,15 @@ Full detail in [DECISIONS.md](DECISIONS.md#open-questions).
 
 Newest first. One or two lines each: what changed, and what the next session
 should know.
+
+### 2026-09-22 — Board settled: ESP32-S3-DevKitC-1 N16R8 (ADR-0012, closes Q4)
+Dual core + WiFi + TWAI narrowed the field to the original ESP32 and the S3.
+Chose the S3 on PSRAM: buffer depth is the defense against SD stalls, and 8MB
+turns that from milliseconds into seconds. Native USB also drops the UART
+bridge chip, one less part to shake loose. **Pin table rewritten, not adjusted**
+— S3 numbering does not carry over (ADC1 is GPIO1–10; octal PSRAM consumes
+GPIO35–37; USB takes 19/20). Phase 1 must decide official PlatformIO platform
+vs the pioarduino fork and pin it.
 
 ### 2026-09-22 — Axis conventions folded into Q1
 Owner deferred the axis and sign conventions until the IMU count and purpose

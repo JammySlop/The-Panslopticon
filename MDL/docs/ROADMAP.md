@@ -27,7 +27,8 @@ not the start of it.
 
 ## Phase 1 — Read one sensor
 
-- [ ] `platformio.ini` targeting `esp32dev`, Arduino framework, pinned libraries
+- [ ] Decide official `platform-espressif32` vs the `pioarduino` fork, and pin it
+- [ ] `platformio.ini` targeting `esp32-s3-devkitc-1`, Arduino framework, PSRAM enabled
 - [ ] `config.h` with every pin and rate from [HARDWARE.md](HARDWARE.md)
 - [ ] I2C bring-up: scan the bus, confirm `WHO_AM_I` returns `0x68`
 - [ ] Configure ranges: ±8g, ±500°/s, 44 Hz DLPF, 100 Hz sample rate

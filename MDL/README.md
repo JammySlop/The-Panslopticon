@@ -48,7 +48,7 @@ project — chiefly, *keep these documents current as you go*.
 
 ## Hardware, in one line
 
-ESP32 dev board + GY-521 (MPU-6050) IMU over I2C + microSD over SPI + GPS over
+ESP32-S3-DevKitC-1 + GY-521 (MPU-6050) IMU over I2C + microSD over SPI + GPS over
 UART, powered from the bike's 12V through a protected buck converter. Full
 detail and the *known electrical gotchas* are in
 [docs/HARDWARE.md](docs/HARDWARE.md) — read that before wiring anything.
