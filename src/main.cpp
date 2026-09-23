@@ -2,6 +2,7 @@
 
 #include "ble_recon.h"
 #include "config.h"
+#include "report.h"
 #include "wifi_recon.h"
 
 namespace {
@@ -29,15 +30,13 @@ void setup() {
 
 void loop() {
     ++cycle;
-    Serial.printf("\n=========== scan #%lu  (uptime %lus) ===========\n",
-                  static_cast<unsigned long>(cycle),
-                  static_cast<unsigned long>(millis() / 1000));
+    report::cycleStart(cycle);
 
     // WiFi and BLE share one radio, so run them back to back, not together.
     // The LED stays lit while a sweep is in progress.
     digitalWrite(LED_BUILTIN, HIGH);
-    wifi_recon::scanAndReport();
-    ble_recon::scanAndReport();
+    report::wifi(cycle, wifi_recon::scan());
+    report::ble(cycle, ble_recon::scan());
     digitalWrite(LED_BUILTIN, LOW);
 
     delay(config::kPauseBetweenCyclesMs);

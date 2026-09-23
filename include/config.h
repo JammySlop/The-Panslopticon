@@ -10,6 +10,10 @@ constexpr uint32_t kSerialBaud = 115200;
 // keep scanning even if no computer is attached.
 constexpr uint32_t kSerialReadyTimeoutMs = 2000;
 
+// true: one JSON object per line, for web/index.html.
+// false: human-readable tables, for `pio device monitor`.
+constexpr bool kJsonOutput = true;
+
 // Passive: only listen for beacons, transmit nothing. Active: send probe
 // requests, which is faster but announces this device to every AP in range.
 constexpr bool kWifiPassiveScan = true;

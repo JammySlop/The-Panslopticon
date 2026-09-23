@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nano ESP32 Recon</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --panel: #171a21;
+      --line: #262b36;
+      --text: #e6e8ec;
+      --muted: #8a93a3;
+      --ok: #4cc38a;
+      --bad: #e5534b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 20px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    button {
+      padding: 6px 14px;
+      font: inherit;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--muted); }
+    .status { display: flex; align-items: center; gap: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.live { background: var(--ok); }
+    .meta { color: var(--muted); margin-left: auto; }
+    main { display: grid; gap: 24px; padding: 16px 20px 40px; }
+    h2 { display: flex; gap: 10px; align-items: baseline; margin: 0 0 8px; font-size: 14px; }
+    h2 .count { color: var(--muted); font-weight: 400; }
+    .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); }
+    th, td { padding: 6px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+    tr:last-child td { border-bottom: 0; }
+    th { color: var(--muted); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+    td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+    td.wrap { white-space: pre-line; }
+    td.flag { color: var(--bad); font-weight: 600; }
+    td.age { color: var(--muted); }
+    .none { color: var(--muted); font-style: italic; }
+    tr.stale { opacity: .4; }
+    td.empty { padding: 20px; text-align: center; color: var(--muted); }
+    .bar {
+      display: inline-block;
+      width: 60px;
+      height: 6px;
+      margin-right: 8px;
+      vertical-align: middle;
+      background: var(--line);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .bar > i { display: block; height: 100%; background: var(--ok); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Nano ESP32 Recon</h1>
+    <button id="connect" type="button">Connect</button>
+    <span class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></span>
+    <span id="meta" class="meta"></span>
+  </header>
+
+  <main>
+    <section>
+      <h2>WiFi networks <span id="wifi-count" class="count"></span></h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Ch</th><th>Security</th><th>Flag</th><th>Last seen</th></tr>
+          </thead>
+          <tbody id="wifi-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Bluetooth LE devices <span id="ble-count" class="count"></span></h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Address</th><th>Type</th><th>Signal</th><th>Name</th><th>Manufacturer</th><th>TX</th><th>Services</th><th>Last seen</th></tr>
+          </thead>
+          <tbody id="ble-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

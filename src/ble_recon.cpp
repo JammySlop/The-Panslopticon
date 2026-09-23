@@ -1,12 +1,10 @@
 #include "ble_recon.h"
 
-#include <Arduino.h>
 #include <BLEAdvertisedDevice.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
 
 #include <algorithm>
-#include <vector>
 
 #include "config.h"
 
@@ -41,36 +39,35 @@ const char* companyName(uint16_t id) {
     }
 }
 
-String describe(BLEAdvertisedDevice& dev) {
-    String out;
-    char buf[24];
+String manufacturerOf(BLEAdvertisedDevice& dev) {
+    if (!dev.haveManufacturerData()) return String();
 
-    if (dev.haveManufacturerData()) {
-        // The first two bytes are the company ID, little-endian.
-        const std::string mfg = dev.getManufacturerData();
-        if (mfg.size() >= 2) {
-            const uint16_t id = static_cast<uint8_t>(mfg[0]) |
-                                (static_cast<uint8_t>(mfg[1]) << 8);
-            if (const char* company = companyName(id)) {
-                out += "mfg=";
-                out += company;
-                out += ' ';
-            } else {
-                snprintf(buf, sizeof(buf), "mfg=0x%04X ", id);
-                out += buf;
-            }
-        }
-    }
-    if (dev.haveTXPower()) {
-        snprintf(buf, sizeof(buf), "tx=%ddBm ", dev.getTXPower());
-        out += buf;
-    }
+    // The first two bytes are the company ID, little-endian.
+    const std::string mfg = dev.getManufacturerData();
+    if (mfg.size() < 2) return String();
+
+    const uint16_t id = static_cast<uint8_t>(mfg[0]) |
+                        (static_cast<uint8_t>(mfg[1]) << 8);
+    if (const char* company = companyName(id)) return String(company);
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "0x%04X", id);
+    return String(buf);
+}
+
+BleDevice toRecord(BLEAdvertisedDevice& dev) {
+    BleDevice rec;
+    rec.address = dev.getAddress().toString().c_str();
+    rec.addressType = addressTypeName(dev.getAddressType());
+    rec.rssi = dev.getRSSI();
+    rec.name = dev.haveName() ? dev.getName().c_str() : "";
+    rec.manufacturer = manufacturerOf(dev);
+    rec.hasTxPower = dev.haveTXPower();
+    rec.txPower = rec.hasTxPower ? dev.getTXPower() : 0;
     for (int i = 0; i < dev.getServiceUUIDCount(); ++i) {
-        out += "svc=";
-        out += dev.getServiceUUID(i).toString().c_str();
-        out += ' ';
+        rec.services.push_back(dev.getServiceUUID(i).toString().c_str());
     }
-    return out;
+    return rec;
 }
 
 }  // namespace
@@ -83,33 +80,20 @@ void begin() {
     scanner->setWindow(99);  // Listen ~99% of the time.
 }
 
-void scanAndReport() {
+std::vector<BleDevice> scan() {
     BLEScanResults results = scanner->start(config::kBleScanSeconds, false);
 
-    std::vector<BLEAdvertisedDevice> devices;
+    std::vector<BleDevice> devices;
     devices.reserve(results.getCount());
     for (int i = 0; i < results.getCount(); ++i) {
-        devices.push_back(results.getDevice(i));
+        BLEAdvertisedDevice dev = results.getDevice(i);
+        devices.push_back(toRecord(dev));
     }
-    std::sort(devices.begin(), devices.end(),
-              [](BLEAdvertisedDevice& a, BLEAdvertisedDevice& b) {
-                  return a.getRSSI() > b.getRSSI();
-              });
-
-    Serial.printf("\n--- BLE: %u device(s) in %lus ---\n",
-                  static_cast<unsigned>(devices.size()),
-                  static_cast<unsigned long>(config::kBleScanSeconds));
-    Serial.printf("%-17s  %-7s  %4s  %-20s  %s\n",
-                  "ADDRESS", "TYPE", "RSSI", "NAME", "DETAILS");
-    for (BLEAdvertisedDevice& dev : devices) {
-        const std::string name = dev.haveName() ? dev.getName() : "";
-        Serial.printf("%-17s  %-7s  %4d  %-20.20s  %s\n",
-                      dev.getAddress().toString().c_str(),
-                      addressTypeName(dev.getAddressType()),
-                      dev.getRSSI(), name.c_str(), describe(dev).c_str());
-    }
-
     scanner->clearResults();  // Free the result buffer before the next cycle.
+
+    std::sort(devices.begin(), devices.end(),
+              [](const BleDevice& a, const BleDevice& b) { return a.rssi > b.rssi; });
+    return devices;
 }
 
 }  // namespace ble_recon
