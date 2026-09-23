@@ -19,6 +19,10 @@ const lastSweepAt = { wifi: 0, ble: 0 };
 let lastMessage = null;
 let activePort = null;
 let activeReader = null;
+let connectedAt = 0;
+let bytesSinceConnect = 0;
+// A full WiFi + BLE cycle takes ~8 s. Silence well past that means trouble.
+const SILENCE_WARNING_MS = 20_000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,7 +55,13 @@ async function readFrom(port) {
     return;
   }
 
+  // The ESP32's USB serial stack discards output until the host asserts DTR,
+  // and Web Serial does not promise to assert it on open.
+  await port.setSignals({ dataTerminalReady: true, requestToSend: true }).catch(() => {});
+
   activePort = port;
+  connectedAt = Date.now();
+  bytesSinceConnect = 0;
   setStatus("Connected. Waiting for the next sweep…", true);
 
   const decoder = new TextDecoderStream();
@@ -63,6 +73,7 @@ async function readFrom(port) {
     for (;;) {
       const { value, done } = await activeReader.read();
       if (done) break;
+      bytesSinceConnect += value.length;
       buffer += value;
       let newline;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -135,6 +146,10 @@ function render() {
   forgetOld(now);
   renderTable("wifi", now, wifiRow, 7);
   renderTable("ble", now, bleRow, 8);
+
+  if (activePort && bytesSinceConnect === 0 && now - connectedAt > SILENCE_WARNING_MS) {
+    setStatus("Connected, but the board has sent nothing. Try unplugging it and reconnecting.", true);
+  }
 
   $("meta").textContent = lastMessage
     ? `sweep #${lastMessage.cycle} · board up ${lastMessage.up}s · updated ${ago(now - lastMessage.at)}`
