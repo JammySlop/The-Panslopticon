@@ -41,6 +41,29 @@ the first approval the page reconnects on its own, including after reflashing.
 - Rows from earlier sweeps stay on screen, dimmed, for 60 s. A single sweep
   regularly misses weak transmitters.
 
+### Investigating
+
+Client-side tools for working through what's nearby. Everything except live
+scan data is stored in the browser's `localStorage`, keyed by the normalized
+(uppercased) address, so a name you give a device shows up wherever that MAC
+appears — including across the WiFi, BLE, and monitor tables.
+
+- **Alias** a MAC/BSSID to a human name; the badge then follows that address
+  everywhere.
+- **Note** free text against a device.
+- **Pin** (★) a device to keep it at the top and highlighted.
+- **Hide** devices you've identified as your own; "Show hidden" reveals them.
+- **Filter** box matches alias, address, SSID, name, vendor, note, and probed
+  network names across every table at once.
+- **Signal sparkline** per device shows RSSI over recent sweeps — a rising line
+  means you're getting closer, which helps physically locate a device.
+- **NEW** badge marks devices first seen in the last 20 s.
+- **Freeze** pauses updates so rows stop moving while you inspect.
+- **Export** downloads everything on screen (plus your aliases and notes) as a
+  timestamped JSON file for a report.
+
+Per-device actions live behind the ▸ toggle on each row.
+
 With `kJsonOutput = true` (the default) the serial output is one JSON object per
 line. Set it to `false` for readable tables in `pio device monitor`.
 

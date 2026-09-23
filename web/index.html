@@ -15,6 +15,8 @@
       --ok: #4cc38a;
       --warn: #d9a441;
       --bad: #e5534b;
+      --accent: #5b9dd9;
+      --gold: #e3b341;
     }
     * { box-sizing: border-box; }
     body {
@@ -23,21 +25,32 @@
       background: var(--bg);
       color: var(--text);
     }
-    header {
-      position: sticky; top: 0; z-index: 2;
-      display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
-      padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line);
+    header, #toolbar {
+      position: sticky; z-index: 3;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+      padding: 10px 20px; background: var(--bg); border-bottom: 1px solid var(--line);
     }
+    header { top: 0; z-index: 4; }
+    #toolbar { top: 49px; }
     h1 { margin: 0; font-size: 16px; font-weight: 600; }
     button {
-      padding: 6px 14px; font: inherit; color: var(--text);
+      padding: 6px 12px; font: inherit; color: var(--text);
       background: var(--panel); border: 1px solid var(--line);
       border-radius: 6px; cursor: pointer;
     }
     button:hover { border-color: var(--muted); }
+    button.on { border-color: var(--accent); color: #cfe4f7; }
+    input[type=search] {
+      flex: 1; min-width: 180px; padding: 6px 10px; font: inherit;
+      color: var(--text); background: var(--panel);
+      border: 1px solid var(--line); border-radius: 6px;
+    }
+    input[type=search]:focus { outline: none; border-color: var(--accent); }
+    label.chk { display: flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
     .status { display: flex; align-items: center; gap: 8px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
     .dot.live { background: var(--ok); }
+    .muted { color: var(--muted); }
     .meta { color: var(--muted); margin-left: auto; }
     main { display: grid; gap: 24px; padding: 16px 20px 40px; }
     h2 { display: flex; gap: 10px; align-items: baseline; margin: 0 0 8px; font-size: 14px; }
@@ -53,13 +66,27 @@
     td.age { color: var(--muted); }
     .none { color: var(--muted); font-style: italic; }
     tr.stale { opacity: .4; }
+    tr.ignored { opacity: .3; }
+    tr.pinned td { background: #1b1e1a; }
+    tr.pinned td:first-child { box-shadow: inset 3px 0 0 var(--gold); }
     td.empty { padding: 20px; text-align: center; color: var(--muted); }
-    .bar { display: inline-block; width: 60px; height: 6px; margin-right: 8px; vertical-align: middle; background: var(--line); border-radius: 3px; overflow: hidden; }
+    .bar { display: inline-block; width: 52px; height: 6px; margin-right: 6px; vertical-align: middle; background: var(--line); border-radius: 3px; overflow: hidden; }
     .bar > i { display: block; height: 100%; background: var(--ok); }
-    .toggle { cursor: pointer; color: var(--muted); user-select: none; margin-right: 6px; }
+    svg.spark { vertical-align: middle; margin-right: 6px; }
+    .trend { font-size: 12px; margin-left: 6px; }
+    .trend.up { color: var(--ok); }
+    .trend.down { color: var(--warn); }
+    .ctrl { cursor: pointer; user-select: none; margin-right: 4px; }
+    .pin { color: var(--muted); }
+    .pin.on { color: var(--gold); }
+    .toggle { color: var(--muted); }
+    .alias { display: inline-block; padding: 0 6px; margin-right: 6px; border-radius: 4px; background: #1e2b1e; color: #9fe0a0; font-size: 12px; font-weight: 600; }
+    .newbadge { display: inline-block; padding: 0 5px; margin-left: 6px; border-radius: 4px; background: #24303f; color: #9fc7f0; font-size: 11px; }
     tr.detail td { background: #0c0e12; color: var(--muted); white-space: normal; font-size: 13px; }
-    tr.detail dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
+    tr.detail .panel { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; align-items: baseline; }
     tr.detail dt { color: var(--text); }
+    tr.detail .row { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; }
+    tr.detail button { padding: 3px 10px; font-size: 13px; }
     .tag { display: inline-block; padding: 1px 6px; margin: 1px; background: var(--line); border-radius: 4px; font-size: 12px; }
     #alerts { display: none; padding: 10px 14px; border: 1px solid var(--bad); border-radius: 6px; background: #2a1515; color: #ffb3ae; }
     #alerts.show { display: block; }
@@ -78,6 +105,14 @@
     <span class="status"><span id="dot" class="dot"></span><span id="status">Not connected</span></span>
     <span id="meta" class="meta"></span>
   </header>
+
+  <div id="toolbar">
+    <input id="filter" type="search" placeholder="Filter by alias, MAC/BSSID, SSID, name, vendor, note…">
+    <button id="freeze" type="button" title="Pause updates so rows stop moving">Freeze</button>
+    <label class="chk"><input id="show-hidden" type="checkbox"> Show hidden <span id="hidden-count"></span></label>
+    <button id="export" type="button" title="Download everything on screen as JSON">Export</button>
+    <span id="filter-info" class="muted"></span>
+  </div>
 
   <main>
     <div id="alerts"></div>
