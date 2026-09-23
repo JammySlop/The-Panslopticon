@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build firmware (debug + release)
+        run: pio run -e nano_esp32 -e nano_esp32_release
+
+      - name: Run host unit tests
+        run: pio test -e native
+
+      - name: Check firmware size
+        run: pio run -e nano_esp32_release --target size
