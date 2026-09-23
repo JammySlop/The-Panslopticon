@@ -1,7 +1,16 @@
 # nano-esp32
 
-PlatformIO project for the **Arduino Nano ESP32** (ESP32-S3). Currently a blink
-sketch that confirms the toolchain, USB, and upload path work.
+PlatformIO project for the **Arduino Nano ESP32** (ESP32-S3): a passive WiFi and
+Bluetooth LE survey tool. It alternates a WiFi sweep and a BLE sweep and prints
+what it finds to the serial monitor. It never joins a network or connects to a
+device.
+
+- **WiFi:** SSID, BSSID, signal (RSSI), channel, security type. Listen-only
+  (passive) scan by default.
+- **BLE:** address and address type, signal, name, manufacturer, TX power,
+  advertised services.
+
+Tuning (scan mode, dwell time, BLE window) lives in `include/config.h`.
 
 ## Commands
 
