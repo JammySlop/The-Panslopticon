@@ -13,5 +13,6 @@ namespace report {
 void cycleStart(uint32_t cycle);
 void wifi(uint32_t cycle, const std::vector<WifiNetwork>& networks);
 void ble(uint32_t cycle, const std::vector<BleDevice>& devices);
+void monitorReport(uint32_t cycle, const MonitorReport& mon);
 
 }  // namespace report

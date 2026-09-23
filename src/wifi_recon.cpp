@@ -1,10 +1,12 @@
 #include "wifi_recon.h"
 
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 #include <algorithm>
 
 #include "config.h"
+#include "oui.h"
 
 namespace wifi_recon {
 
@@ -32,6 +34,49 @@ const char* securityFlag(wifi_auth_mode_t mode) {
     return "";
 }
 
+namespace {
+
+const char* cipherName(wifi_cipher_type_t c) {
+    switch (c) {
+        case WIFI_CIPHER_TYPE_NONE:      return "none";
+        case WIFI_CIPHER_TYPE_WEP40:     return "WEP40";
+        case WIFI_CIPHER_TYPE_WEP104:    return "WEP104";
+        case WIFI_CIPHER_TYPE_TKIP:      return "TKIP";
+        case WIFI_CIPHER_TYPE_CCMP:      return "CCMP";
+        case WIFI_CIPHER_TYPE_TKIP_CCMP: return "TKIP+CCMP";
+        case WIFI_CIPHER_TYPE_GCMP:      return "GCMP";
+        case WIFI_CIPHER_TYPE_GCMP256:   return "GCMP256";
+        default:                         return "";
+    }
+}
+
+// Fills the Tier 1 fields that WiFi.SSID()/RSSI()/etc. don't expose, by reading
+// the raw scan record the driver kept.
+void addDetails(int index, WifiNetwork& n) {
+    const auto* rec =
+        reinterpret_cast<const wifi_ap_record_t*>(WiFi.getScanInfoByIndex(index));
+    if (rec == nullptr) return;
+
+    n.pairwiseCipher = cipherName(rec->pairwise_cipher);
+    n.groupCipher = cipherName(rec->group_cipher);
+    n.wps = rec->wps;
+
+    String phy;
+    if (rec->phy_11b) phy += 'b';
+    if (rec->phy_11g) phy += 'g';
+    if (rec->phy_11n) phy += 'n';
+    if (rec->phy_lr) phy += "+lr";
+    n.phy = phy;
+
+    if (rec->country.cc[0]) {
+        char cc[3] = {rec->country.cc[0], rec->country.cc[1], 0};
+        n.country = cc;
+    }
+    n.vendor = oui::vendor(rec->bssid);
+}
+
+}  // namespace
+
 void begin() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();  // Scan only. This device never joins a network.
@@ -44,17 +89,23 @@ std::vector<WifiNetwork> scan() {
                                             config::kWifiPassiveScan,
                                             config::kWifiDwellMsPerChannel);
     if (found < 0) {
-        // Plain text, not JSON, so the web page ignores it.
         Serial.printf("WiFi scan failed (%d)\n", found);
         return networks;
     }
 
     networks.reserve(found);
     for (int i = 0; i < found; ++i) {
-        networks.push_back({WiFi.SSID(i), WiFi.BSSIDstr(i),
-                            static_cast<int>(WiFi.RSSI(i)),
-                            static_cast<int>(WiFi.channel(i)),
-                            WiFi.encryptionType(i)});
+        WifiNetwork n{};
+        n.ssid = WiFi.SSID(i);
+        n.bssid = WiFi.BSSIDstr(i);
+        n.rssi = WiFi.RSSI(i);
+        n.channel = WiFi.channel(i);
+        n.auth = WiFi.encryptionType(i);
+        n.pairwiseCipher = "";
+        n.groupCipher = "";
+        n.wps = false;
+        addDetails(i, n);
+        networks.push_back(std::move(n));
     }
     WiFi.scanDelete();
 

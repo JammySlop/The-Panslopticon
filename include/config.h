@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <array>
+
 namespace config {
 
 constexpr uint32_t kSerialBaud = 115200;
@@ -26,5 +28,27 @@ constexpr bool kBleActiveScan = true;
 constexpr uint32_t kBleScanSeconds = 5;
 
 constexpr uint32_t kPauseBetweenCyclesMs = 1000;
+
+// --- Tier 2: monitor (promiscuous) mode ------------------------------------
+// Receive-only capture of 802.11 frame headers. Set false to skip the monitor
+// phase entirely and behave like the scan-only build.
+constexpr bool kMonitorEnabled = true;
+
+// Channels to hop through. 1/6/11 are the non-overlapping 2.4 GHz channels and
+// carry most traffic; add 2-5,7-10,12-13 for completeness at the cost of time.
+constexpr std::array<uint8_t, 3> kMonitorChannels = {1, 6, 11};
+// Time spent listening on each channel. Longer catches more, sweeps slower.
+constexpr uint32_t kMonitorDwellMs = 400;
+
+// Bounded so a crowded environment cannot exhaust RAM.
+constexpr uint32_t kMonitorQueueLen = 256;
+constexpr size_t kMaxMonitorClients = 80;
+constexpr size_t kMaxMonitorAps = 50;
+constexpr size_t kMaxClientsPerAp = 40;
+constexpr size_t kMaxProbesPerClient = 6;
+
+// Deauth/disassoc frames per BSSID within one sweep before it is flagged as a
+// likely attack. Normal roaming produces only a few.
+constexpr uint32_t kDeauthAlertThreshold = 8;
 
 }  // namespace config

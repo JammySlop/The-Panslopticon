@@ -2,6 +2,7 @@
 
 #include "ble_recon.h"
 #include "config.h"
+#include "monitor.h"
 #include "report.h"
 #include "wifi_recon.h"
 
@@ -26,6 +27,7 @@ void setup() {
     Serial.println("\n=== Nano ESP32 WiFi/BLE recon ===");
     wifi_recon::begin();
     ble_recon::begin();
+    monitor::begin();
 }
 
 void loop() {
@@ -37,6 +39,8 @@ void loop() {
     digitalWrite(LED_BUILTIN, HIGH);
     report::wifi(cycle, wifi_recon::scan());
     report::ble(cycle, ble_recon::scan());
+    // Monitor mode reconfigures the radio, so it runs last, after the scans.
+    if (config::kMonitorEnabled) report::monitorReport(cycle, monitor::sweep());
     digitalWrite(LED_BUILTIN, LOW);
 
     delay(config::kPauseBetweenCyclesMs);

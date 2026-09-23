@@ -5,10 +5,19 @@ Bluetooth LE survey tool. It alternates a WiFi sweep and a BLE sweep and sends
 what it finds over USB, where a local web page displays it. It never joins a
 network or connects to a device.
 
-- **WiFi:** SSID, BSSID, signal (RSSI), channel, security type. Listen-only
-  (passive) scan by default.
-- **BLE:** address and address type, signal, name, manufacturer, TX power,
-  advertised services.
+- **WiFi (scan):** SSID, BSSID, signal (RSSI), channel, security, cipher, WPS,
+  PHY modes, advertised country, and BSSID vendor. Listen-only (passive) by
+  default.
+- **BLE:** address and type, signal, name, manufacturer, TX power, appearance,
+  decoded product family (AirPods, Find My, iBeacon…), a rough distance
+  estimate, and advertised services.
+- **Monitor mode (Tier 2, receive-only):** hops channels 1/6/11 in promiscuous
+  mode and parses 802.11 *frame headers only* to report devices probing for
+  networks (and the network names they ask for), which clients are associated
+  with which AP, per-channel activity, and deauth/disassoc bursts (a nearby
+  attack signature). Set `kMonitorEnabled = false` in `include/config.h` for a
+  scan-only build. This phase parses headers the radio already receives; it
+  transmits nothing and never inspects frame contents.
 
 Tuning (scan mode, dwell time, BLE window, output format) lives in
 `include/config.h`.

@@ -2,27 +2,29 @@
 
 // Reads JSON lines from the scanner over Web Serial and renders them.
 //
-// Every string shown here (SSIDs, BLE names) is chosen by whoever is
-// broadcasting nearby, so all text goes into the DOM via textContent. Never
-// switch this to innerHTML.
+// Every string shown here (SSIDs, BLE names, probed network names) is chosen by
+// whoever is broadcasting nearby, so all text reaches the DOM via textContent.
+// Never switch this to innerHTML.
 
 const NANO_ESP32 = { usbVendorId: 0x2341, usbProductId: 0x0070 };
 const BAUD_RATE = 115200;
-// Sweeps miss weak transmitters now and then. Keep an entry on screen (dimmed)
-// until it has been absent this long.
-const FORGET_AFTER_MS = 60_000;
-// 16-bit Bluetooth SIG UUIDs are sent in their full 128-bit form.
+const FORGET_AFTER_MS = 60_000;      // Keep a missed entry on screen, dimmed, this long.
+const SILENCE_WARNING_MS = 20_000;   // A full cycle is ~15 s; warn past this.
 const SIG_BASE_UUID = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i;
 
-const seen = { wifi: new Map(), ble: new Map() };
-const lastSweepAt = { wifi: 0, ble: 0 };
+// Live tables merge repeated sightings, keyed by a stable id, tracking when each
+// was first and last heard.
+const seen = { wifi: new Map(), ble: new Map(), clients: new Map(), aps: new Map() };
+const sweepAt = { wifi: 0, ble: 0, clients: 0, aps: 0 };
+const expanded = { wifi: new Set(), ble: new Set(), clients: new Set(), aps: new Set() };
+let channels = [];
+let alerts = [];
 let lastMessage = null;
+
 let activePort = null;
 let activeReader = null;
 let connectedAt = 0;
 let bytesSinceConnect = 0;
-// A full WiFi + BLE cycle takes ~8 s. Silence well past that means trouble.
-const SILENCE_WARNING_MS = 20_000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -37,7 +39,6 @@ async function connect() {
     const port = await navigator.serial.requestPort({ filters: [NANO_ESP32] });
     await readFrom(port);
   } catch (err) {
-    // NotFoundError means the user closed the port picker without choosing.
     if (err.name !== "NotFoundError") setStatus(err.message, false);
   }
 }
@@ -55,8 +56,8 @@ async function readFrom(port) {
     return;
   }
 
-  // The ESP32's USB serial stack discards output until the host asserts DTR,
-  // and Web Serial does not promise to assert it on open.
+  // The ESP32 USB serial stack discards output until the host asserts DTR, and
+  // Web Serial does not promise to assert it on open.
   await port.setSignals({ dataTerminalReady: true, requestToSend: true }).catch(() => {});
 
   activePort = port;
@@ -95,27 +96,41 @@ async function readFrom(port) {
 
 // ---------------------------------------------------------------- data -----
 
+function mergeInto(type, items, idKey) {
+  const now = Date.now();
+  const entries = seen[type];
+  for (const item of items) {
+    const key = item[idKey];
+    if (key == null) continue;
+    const previous = entries.get(key);
+    entries.set(key, { ...item, firstSeen: previous?.firstSeen ?? now, lastSeen: now });
+  }
+  sweepAt[type] = now;
+}
+
 function handleLine(line) {
   if (!line.startsWith("{")) return;  // Boot banner or plain-text errors.
-
   let msg;
   try {
     msg = JSON.parse(line);
   } catch {
     return;  // The first line after connecting is often cut off mid-way.
   }
-  if ((msg.t !== "wifi" && msg.t !== "ble") || !Array.isArray(msg.items)) return;
 
-  const now = Date.now();
-  const entries = seen[msg.t];
-  for (const item of msg.items) {
-    const key = msg.t === "wifi" ? item.bssid : item.addr;
-    const previous = entries.get(key);
-    entries.set(key, { ...item, firstSeen: previous?.firstSeen ?? now, lastSeen: now });
+  if (msg.t === "wifi" && Array.isArray(msg.items)) {
+    mergeInto("wifi", msg.items, "bssid");
+  } else if (msg.t === "ble" && Array.isArray(msg.items)) {
+    mergeInto("ble", msg.items, "addr");
+  } else if (msg.t === "monitor") {
+    mergeInto("clients", msg.clients ?? [], "mac");
+    mergeInto("aps", msg.aps ?? [], "bssid");
+    channels = msg.channels ?? [];
+    alerts = msg.alerts ?? [];
+  } else {
+    return;
   }
-  lastSweepAt[msg.t] = now;
-  lastMessage = { cycle: msg.cycle, up: msg.up, at: now };
 
+  lastMessage = { cycle: msg.cycle, up: msg.up, at: Date.now() };
   if (activePort) setStatus("Connected", true);
   render();
 }
@@ -128,111 +143,269 @@ function forgetOld(now) {
   }
 }
 
-// Entries from the latest sweep first, each group strongest first.
+// Latest-sweep entries first, each group strongest first.
 function ordered(type) {
-  const sweep = lastSweepAt[type];
+  const fresh = sweepAt[type];
   return [...seen[type].values()].sort((a, b) => {
-    const aFresh = a.lastSeen === sweep;
-    const bFresh = b.lastSeen === sweep;
-    if (aFresh !== bFresh) return aFresh ? -1 : 1;
-    return b.rssi - a.rssi;
+    const af = a.lastSeen === fresh, bf = b.lastSeen === fresh;
+    if (af !== bf) return af ? -1 : 1;
+    return (b.rssi ?? -999) - (a.rssi ?? -999);
   });
 }
+
+// --------------------------------------------------------------- columns ---
+// Each column is data: a label, the entry field it reads (so it can also be
+// hidden from the auto-details row), and how to render it. Adding a firmware
+// field means adding one row here — or nothing, and it shows up in details.
+
+const text = (v) => (v == null || v === "" ? null : String(v));
+const tags = (list) => (Array.isArray(list) && list.length ? list : null);
+
+const WIFI_COLUMNS = [
+  { label: "SSID", key: "ssid", get: (e) => e.ssid, placeholder: "hidden" },
+  { label: "BSSID", key: "bssid", cls: "mono", get: (e) => e.bssid },
+  { label: "Signal", key: "rssi", node: (e) => signalNode(e.rssi) },
+  { label: "Ch", key: "ch", get: (e) => e.ch },
+  { label: "Security", key: "auth", get: (e) => e.auth },
+  { label: "Cipher", key: "cipher", get: (e) => text(e.cipher), placeholder: "—" },
+  { label: "WPS", key: "wps", get: (e) => (e.wps ? "on" : null), placeholder: "—" },
+  { label: "Vendor", key: "vendor", get: (e) => text(e.vendor), placeholder: "—" },
+  { label: "Country", key: "country", get: (e) => text(e.country), placeholder: "—" },
+  { label: "PHY", key: "phy", get: (e) => text(e.phy), placeholder: "—" },
+  { label: "Flag", key: "flag", cls: "flag", get: (e) => text(e.flag) },
+  { label: "Last seen", age: true },
+];
+
+const BLE_COLUMNS = [
+  { label: "Address", key: "addr", cls: "mono", get: (e) => e.addr },
+  { label: "Type", key: "type", get: (e) => e.type },
+  { label: "Signal", key: "rssi", node: (e) => signalNode(e.rssi) },
+  { label: "Name", key: "name", get: (e) => text(e.name), placeholder: "—" },
+  { label: "Product", key: "product", get: (e) => text(e.product), placeholder: "—" },
+  { label: "Appearance", key: "appearance", get: (e) => text(e.appearance), placeholder: "—" },
+  { label: "Manufacturer", key: "mfg", get: (e) => text(e.mfg), placeholder: "—" },
+  { label: "Dist", key: "dist", get: (e) => (e.dist == null ? null : `${e.dist} m`), placeholder: "—" },
+  { label: "TX", key: "tx", get: (e) => (e.tx == null ? null : `${e.tx} dBm`), placeholder: "—" },
+  { label: "Services", key: "svc", cls: "wrap mono", node: (e) => tagsNode((e.svc ?? []).map(shortUuid)) },
+  { label: "Last seen", age: true },
+];
+
+const CLIENT_COLUMNS = [
+  { label: "Device MAC", key: "mac", cls: "mono", get: (e) => e.mac },
+  { label: "Vendor", key: "vendor", get: (e) => (e.rand ? "randomized" : text(e.vendor)), placeholder: "—" },
+  { label: "Signal", key: "rssi", node: (e) => signalNode(e.rssi) },
+  { label: "Frames", key: "frames", get: (e) => e.frames },
+  { label: "Looking for", key: "probes", cls: "wrap", node: (e) => tagsNode(e.probes) },
+  { label: "Last seen", age: true },
+];
+
+const AP_COLUMNS = [
+  { label: "BSSID", key: "bssid", cls: "mono", get: (e) => e.bssid },
+  { label: "SSID", key: "ssid", get: (e) => text(e.ssid), placeholder: "hidden" },
+  { label: "Vendor", key: "vendor", get: (e) => text(e.vendor), placeholder: "—" },
+  { label: "Clients", key: "clients", get: (e) => e.clients },
+  { label: "Frames", key: "frames", get: (e) => e.frames },
+  { label: "Last seen", age: true },
+];
+
+// Internal bookkeeping fields never shown as data.
+const INTERNAL = new Set(["firstSeen", "lastSeen"]);
 
 // ---------------------------------------------------------------- render ---
 
 function render() {
   const now = Date.now();
   forgetOld(now);
-  renderTable("wifi", now, wifiRow, 7);
-  renderTable("ble", now, bleRow, 8);
+
+  renderTable("wifi", WIFI_COLUMNS, now);
+  renderTable("ble", BLE_COLUMNS, now);
+  renderTable("clients", CLIENT_COLUMNS, now);
+  renderTable("aps", AP_COLUMNS, now);
+  renderChannels();
+  renderAlerts();
 
   if (activePort && bytesSinceConnect === 0 && now - connectedAt > SILENCE_WARNING_MS) {
     setStatus("Connected, but the board has sent nothing. Try unplugging it and reconnecting.", true);
   }
-
   $("meta").textContent = lastMessage
     ? `sweep #${lastMessage.cycle} · board up ${lastMessage.up}s · updated ${ago(now - lastMessage.at)}`
     : "";
 }
 
-function renderTable(type, now, makeRow, columns) {
-  const rows = ordered(type);
-  const fresh = rows.filter((r) => r.lastSeen === lastSweepAt[type]).length;
-  $(`${type}-count`).textContent = rows.length
-    ? `${fresh} in last sweep, ${rows.length} total`
-    : "";
+function renderTable(type, columns, now) {
+  $(`${type}-head`).replaceChildren(...columns.map((c) => {
+    const th = document.createElement("th");
+    th.textContent = c.label;
+    return th;
+  }));
 
+  const rows = ordered(type);
+  const fresh = rows.filter((r) => r.lastSeen === sweepAt[type]).length;
+  const countEl = $(`${type}-count`);
+  if (countEl) countEl.textContent = rows.length ? `${fresh} in last sweep, ${rows.length} total` : "";
+
+  const columnKeys = new Set(columns.map((c) => c.key).filter(Boolean));
   const body = $(`${type}-body`);
+
   if (!rows.length) {
     const tr = document.createElement("tr");
-    const td = cell(tr, activePort ? "Waiting for data…" : "Connect the scanner to begin.", "empty");
-    td.colSpan = columns;
+    const td = document.createElement("td");
+    td.className = "empty";
+    td.colSpan = columns.length;
+    td.textContent = activePort ? "Waiting for data…" : "Connect the scanner to begin.";
+    tr.appendChild(td);
     body.replaceChildren(tr);
     return;
   }
-  body.replaceChildren(...rows.map((entry) => {
-    const tr = makeRow(entry, now);
-    if (entry.lastSeen !== lastSweepAt[type]) tr.className = "stale";
-    return tr;
-  }));
+
+  const out = [];
+  for (const entry of rows) {
+    const idKey = columns[0].key;
+    const id = entry[idKey];
+    const extras = Object.keys(entry).filter((k) => !columnKeys.has(k) && !INTERNAL.has(k));
+    const tr = buildRow(type, columns, entry, now, id, extras);
+    if (entry.lastSeen !== sweepAt[type]) tr.className = "stale";
+    out.push(tr);
+    if (extras.length && expanded[type].has(id)) out.push(detailRow(entry, extras, columns.length));
+  }
+  body.replaceChildren(...out);
 }
 
-function wifiRow(n, now) {
+function buildRow(type, columns, entry, now, id, extras) {
   const tr = document.createElement("tr");
-  optionalCell(tr, n.ssid, "hidden");
-  cell(tr, n.bssid, "mono");
-  signalCell(tr, n.rssi);
-  cell(tr, n.ch);
-  cell(tr, n.auth);
-  cell(tr, n.flag, "flag");
-  cell(tr, ago(now - n.lastSeen), "age");
+  columns.forEach((col, i) => {
+    const td = document.createElement("td");
+    if (col.cls) td.className = col.cls;
+
+    if (i === 0 && extras.length) {
+      const toggle = document.createElement("span");
+      toggle.className = "toggle";
+      toggle.textContent = expanded[type].has(id) ? "▾" : "▸";
+      toggle.title = `${extras.length} more field(s)`;
+      toggle.addEventListener("click", () => {
+        expanded[type].has(id) ? expanded[type].delete(id) : expanded[type].add(id);
+        render();
+      });
+      td.appendChild(toggle);
+    }
+
+    if (col.age) {
+      td.className = "age";
+      td.append(ago(now - entry.lastSeen));
+    } else if (col.node) {
+      const n = col.node(entry);
+      if (n) td.append(n);
+      else placeholder(td, col.placeholder);
+    } else {
+      const v = col.get(entry);
+      if (v == null || v === "") placeholder(td, col.placeholder);
+      else td.append(document.createTextNode(String(v)));
+    }
+    tr.appendChild(td);
+  });
   return tr;
 }
 
-function bleRow(d, now) {
+function detailRow(entry, extras, span) {
   const tr = document.createElement("tr");
-  cell(tr, d.addr, "mono");
-  cell(tr, d.type);
-  signalCell(tr, d.rssi);
-  optionalCell(tr, d.name, "—");
-  optionalCell(tr, d.mfg, "—");
-  optionalCell(tr, d.tx == null ? "" : `${d.tx} dBm`, "—");
-  optionalCell(tr, (d.svc ?? []).map(shortUuid).join("\n"), "—").classList.add("wrap", "mono");
-  cell(tr, ago(now - d.lastSeen), "age");
-  return tr;
-}
-
-function cell(tr, text, className) {
+  tr.className = "detail";
   const td = document.createElement("td");
-  td.textContent = text ?? "";
-  if (className) td.className = className;
+  td.colSpan = span;
+  const dl = document.createElement("dl");
+  for (const key of extras) {
+    const dt = document.createElement("dt");
+    dt.textContent = key;
+    const dd = document.createElement("dd");
+    const v = entry[key];
+    dd.textContent = Array.isArray(v) ? (v.length ? v.join(", ") : "—") : String(v);
+    dl.append(dt, dd);
+  }
+  td.appendChild(dl);
   tr.appendChild(td);
-  return td;
+  return tr;
 }
 
-function optionalCell(tr, text, placeholder) {
-  if (text) return cell(tr, text);
-  const td = cell(tr, "");
+function placeholder(td, label) {
   const span = document.createElement("span");
   span.className = "none";
-  span.textContent = placeholder;
+  span.textContent = label ?? "";
   td.appendChild(span);
-  return td;
 }
 
-function signalCell(tr, rssi) {
-  const td = document.createElement("td");
+function signalNode(rssi) {
+  if (rssi == null) return null;
+  const frag = document.createDocumentFragment();
   const bar = document.createElement("span");
   const fill = document.createElement("i");
-  // Map roughly -100 dBm (barely there) .. -30 dBm (right next to it) to 0..100%.
   const percent = Math.max(0, Math.min(100, ((rssi + 100) / 70) * 100));
   fill.style.width = `${percent}%`;
   bar.className = "bar";
   bar.appendChild(fill);
-  td.append(bar, `${rssi} dBm`);
-  tr.appendChild(td);
+  frag.append(bar, document.createTextNode(`${rssi} dBm`));
+  return frag;
 }
+
+function tagsNode(list) {
+  if (!Array.isArray(list) || !list.length) return null;
+  const frag = document.createDocumentFragment();
+  for (const item of list) {
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.textContent = item;
+    frag.appendChild(span);
+  }
+  return frag;
+}
+
+function renderChannels() {
+  const host = $("channels");
+  if (!channels.length) {
+    host.replaceChildren(Object.assign(document.createElement("span"), {
+      className: "none", textContent: "No channel activity captured yet.",
+    }));
+    return;
+  }
+  const max = Math.max(...channels.map((c) => c.pkts), 1);
+  const out = [];
+  for (const c of channels) {
+    const label = document.createElement("span");
+    label.textContent = c.ch;
+    const track = document.createElement("div");
+    track.className = "track";
+    const fill = document.createElement("i");
+    fill.style.width = `${(c.pkts / max) * 100}%`;
+    track.appendChild(fill);
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = `${c.pkts} pkts`;
+    out.push(label, track, n);
+  }
+  host.replaceChildren(...out);
+}
+
+function renderAlerts() {
+  const host = $("alerts");
+  if (!alerts.length) {
+    host.className = "";
+    host.replaceChildren();
+    return;
+  }
+  host.className = "show";
+  const out = [];
+  for (const a of alerts) {
+    const line = document.createElement("div");
+    const b = document.createElement("b");
+    b.textContent = `⚠ ${a.kind}`;
+    line.append(b, document.createTextNode(` — ${a.count} deauth/disassoc frames targeting `));
+    const mac = document.createElement("b");
+    mac.textContent = a.bssid;
+    line.append(mac);
+    out.push(line);
+  }
+  host.replaceChildren(...out);
+}
+
+// ---------------------------------------------------------------- utils ----
 
 function shortUuid(uuid) {
   const match = SIG_BASE_UUID.exec(uuid);
@@ -255,8 +428,6 @@ function setStatus(text, live) {
 $("connect").addEventListener("click", () => (activePort ? disconnect() : connect()));
 
 if ("serial" in navigator) {
-  // Reconnect automatically when a previously approved board reappears, such as
-  // after flashing new firmware.
   navigator.serial.addEventListener("connect", (event) => readFrom(event.target));
   navigator.serial.getPorts().then((ports) => {
     if (ports.length) readFrom(ports[0]);

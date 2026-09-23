@@ -13,6 +13,7 @@
       --text: #e6e8ec;
       --muted: #8a93a3;
       --ok: #4cc38a;
+      --warn: #d9a441;
       --bad: #e5534b;
     }
     * { box-sizing: border-box; }
@@ -23,26 +24,15 @@
       color: var(--text);
     }
     header {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 16px;
-      padding: 12px 20px;
-      background: var(--bg);
-      border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 2;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
+      padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line);
     }
     h1 { margin: 0; font-size: 16px; font-weight: 600; }
     button {
-      padding: 6px 14px;
-      font: inherit;
-      color: var(--text);
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      cursor: pointer;
+      padding: 6px 14px; font: inherit; color: var(--text);
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 6px; cursor: pointer;
     }
     button:hover { border-color: var(--muted); }
     .status { display: flex; align-items: center; gap: 8px; }
@@ -64,17 +54,21 @@
     .none { color: var(--muted); font-style: italic; }
     tr.stale { opacity: .4; }
     td.empty { padding: 20px; text-align: center; color: var(--muted); }
-    .bar {
-      display: inline-block;
-      width: 60px;
-      height: 6px;
-      margin-right: 8px;
-      vertical-align: middle;
-      background: var(--line);
-      border-radius: 3px;
-      overflow: hidden;
-    }
+    .bar { display: inline-block; width: 60px; height: 6px; margin-right: 8px; vertical-align: middle; background: var(--line); border-radius: 3px; overflow: hidden; }
     .bar > i { display: block; height: 100%; background: var(--ok); }
+    .toggle { cursor: pointer; color: var(--muted); user-select: none; margin-right: 6px; }
+    tr.detail td { background: #0c0e12; color: var(--muted); white-space: normal; font-size: 13px; }
+    tr.detail dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
+    tr.detail dt { color: var(--text); }
+    .tag { display: inline-block; padding: 1px 6px; margin: 1px; background: var(--line); border-radius: 4px; font-size: 12px; }
+    #alerts { display: none; padding: 10px 14px; border: 1px solid var(--bad); border-radius: 6px; background: #2a1515; color: #ffb3ae; }
+    #alerts.show { display: block; }
+    #alerts b { color: #fff; }
+    .chan { display: grid; grid-template-columns: 3ch 1fr max-content; gap: 6px 10px; align-items: center; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+    .chan .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+    .chan .track > i { display: block; height: 100%; background: var(--warn); }
+    .chan .n { color: var(--muted); text-align: right; }
+    .group-title { margin: 8px 0 -8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -86,28 +80,45 @@
   </header>
 
   <main>
+    <div id="alerts"></div>
+
     <section>
       <h2>WiFi networks <span id="wifi-count" class="count"></span></h2>
-      <div class="scroll">
-        <table>
-          <thead>
-            <tr><th>SSID</th><th>BSSID</th><th>Signal</th><th>Ch</th><th>Security</th><th>Flag</th><th>Last seen</th></tr>
-          </thead>
-          <tbody id="wifi-body"></tbody>
-        </table>
-      </div>
+      <div class="scroll"><table>
+        <thead><tr id="wifi-head"></tr></thead>
+        <tbody id="wifi-body"></tbody>
+      </table></div>
     </section>
 
     <section>
       <h2>Bluetooth LE devices <span id="ble-count" class="count"></span></h2>
-      <div class="scroll">
-        <table>
-          <thead>
-            <tr><th>Address</th><th>Type</th><th>Signal</th><th>Name</th><th>Manufacturer</th><th>TX</th><th>Services</th><th>Last seen</th></tr>
-          </thead>
-          <tbody id="ble-body"></tbody>
-        </table>
-      </div>
+      <div class="scroll"><table>
+        <thead><tr id="ble-head"></tr></thead>
+        <tbody id="ble-body"></tbody>
+      </table></div>
+    </section>
+
+    <p class="group-title">Monitor mode — passively overheard 802.11 traffic</p>
+
+    <section>
+      <h2>Probing clients <span id="clients-count" class="count"></span></h2>
+      <div class="scroll"><table>
+        <thead><tr id="clients-head"></tr></thead>
+        <tbody id="clients-body"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>Access point traffic <span id="aps-count" class="count"></span></h2>
+      <div class="scroll"><table>
+        <thead><tr id="aps-head"></tr></thead>
+        <tbody id="aps-body"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>Channel activity</h2>
+      <div id="channels" class="chan"></div>
     </section>
   </main>
 
