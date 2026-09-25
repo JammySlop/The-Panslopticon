@@ -26,3 +26,8 @@ jobs:
 
       - name: Build firmware (all boards)
         run: pio run -e esp32c5 -e nano_esp32
+
+      - name: Host service tests
+        run: |
+          pip install -r host/requirements.txt
+          python -m unittest discover -s host -v

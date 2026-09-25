@@ -1,49 +1,37 @@
 "use strict";
 
-// Reads JSON lines from the scanner over Web Serial and renders them, plus a
-// client-side investigation layer: aliases, notes, pins, hide, filter, signal
-// sparklines, and export. All investigation state lives in localStorage; the
-// board stays stateless.
+// Renders what the host recon service (host/recon_service.py) has recorded,
+// plus the investigation layer: aliases, notes, pins, hide, filter, signal
+// sparklines, and export. The service owns the serial port and the SQLite
+// database; this page only polls /api/state and writes annotations back.
 //
 // Every broadcast string (SSIDs, BLE names, probed network names) reaches the
 // DOM via textContent. User-entered aliases/notes are also set via textContent.
 // Never introduce innerHTML.
 
-// USB IDs offered in the port picker.
-const BOARD_FILTERS = [
-  { usbVendorId: 0x2341, usbProductId: 0x0070 }, // Arduino Nano ESP32 (native USB)
-  { usbVendorId: 0x1a86, usbProductId: 0x55d3 }, // ESP32-C5-DevKitC-1 UART port (CH343)
-  { usbVendorId: 0x303a, usbProductId: 0x1001 }, // ESP32-C5 native USB Serial/JTAG port
-];
-const BAUD_RATE = 115200;
-const FORGET_AFTER_MS = 60_000;
+const POLL_MS = 2000;
+const WINDOW_S = 60;                 // Show devices seen within this many seconds.
 // A dual-band WiFi scan (ESP32-C5) prints nothing for ~17 s, so allow longer.
 const SILENCE_WARNING_MS = 30_000;
 const NEW_DEVICE_MS = 20_000;        // First-seen within this window gets a NEW badge.
-const HISTORY_POINTS = 40;           // RSSI samples kept per address for the sparkline.
-const HISTORY_ADDRS = 600;           // Cap on tracked addresses (bounds memory).
 const SIG_BASE_UUID = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i;
 
+// Before the database existed, investigation state lived in localStorage.
+const LEGACY_KEYS = { alias: "recon.alias", note: "recon.note", pin: "recon.pin", ignore: "recon.ignore" };
+const MIGRATED_FLAG = "recon.migratedToDb";
+
 const seen = { wifi: new Map(), ble: new Map(), clients: new Map(), aps: new Map() };
-const sweepAt = { wifi: 0, ble: 0, clients: 0, aps: 0 };
 const expanded = { wifi: new Set(), ble: new Set(), clients: new Set(), aps: new Set() };
-const history = new Map();  // normAddr -> [{ t, rssi }]
 let channels = [];
 let alerts = [];
 let lastMessage = null;
 
-let activePort = null;
-let activeReader = null;
-let connectedAt = 0;
-let bytesSinceConnect = 0;
+let serial = null;          // Board connection status reported by the service.
+let serviceUp = false;
+let migrationChecked = false;
 
-// Investigation state, persisted.
-const store = {
-  alias: loadObj("recon.alias"),
-  note: loadObj("recon.note"),
-  pin: loadObj("recon.pin"),
-  ignore: loadObj("recon.ignore"),
-};
+// Investigation state, from the database: normAddr -> {alias, note, pinned, hidden}.
+let notes = {};
 let filterText = "";
 let frozen = false;
 let showHidden = false;
@@ -51,182 +39,119 @@ let showHidden = false;
 const $ = (id) => document.getElementById(id);
 const normAddr = (a) => String(a ?? "").toUpperCase();
 
-function loadObj(key) {
-  try {
-    return JSON.parse(localStorage.getItem(key) || "{}");
-  } catch {
-    return {};
-  }
-}
-function persist(key, obj) {
-  try {
-    localStorage.setItem(key, JSON.stringify(obj));
-  } catch {
-    /* private mode / quota: aliases just won't persist. */
-  }
-}
-
 // --- investigation accessors (also the test API on window.recon) -----------
 
-function setAlias(addr, name) {
+// Applies the change locally at once, then saves it and adopts the stored result.
+async function annotate(addr, changes) {
   const key = normAddr(addr);
-  if (name && name.trim()) store.alias[key] = name.trim();
-  else delete store.alias[key];
-  persist("recon.alias", store.alias);
+  notes[key] = { alias: "", note: "", pinned: false, hidden: false, ...notes[key], ...changes };
   render();
-}
-function setNote(addr, text) {
-  const key = normAddr(addr);
-  if (text && text.trim()) store.note[key] = text.trim();
-  else delete store.note[key];
-  persist("recon.note", store.note);
-  render();
-}
-function togglePin(addr) {
-  const key = normAddr(addr);
-  if (store.pin[key]) delete store.pin[key];
-  else store.pin[key] = true;
-  persist("recon.pin", store.pin);
-  render();
-}
-function toggleIgnore(addr) {
-  const key = normAddr(addr);
-  if (store.ignore[key]) delete store.ignore[key];
-  else store.ignore[key] = true;
-  persist("recon.ignore", store.ignore);
-  render();
-}
-const aliasOf = (addr) => store.alias[normAddr(addr)] || "";
-const noteOf = (addr) => store.note[normAddr(addr)] || "";
-const isPinned = (addr) => !!store.pin[normAddr(addr)];
-const isIgnored = (addr) => !!store.ignore[normAddr(addr)];
-
-// ---------------------------------------------------------------- serial ---
-
-async function connect() {
-  if (!("serial" in navigator)) {
-    setStatus("Web Serial unavailable. Use Chrome or Edge on http://localhost.", false);
-    return;
-  }
   try {
-    const port = await navigator.serial.requestPort({ filters: BOARD_FILTERS });
-    await readFrom(port);
+    const res = await fetch(`/api/annotations/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+    notes[key] = await res.json();
   } catch (err) {
-    if (err.name !== "NotFoundError") setStatus(err.message, false);
+    setStatus(`Could not save to the database: ${err.message}`, false);
   }
+  render();
 }
+const setAlias = (addr, name) => annotate(addr, { alias: String(name ?? "").trim() });
+const setNote = (addr, text) => annotate(addr, { note: String(text ?? "").trim() });
+const togglePin = (addr) => annotate(addr, { pinned: !isPinned(addr) });
+const toggleIgnore = (addr) => annotate(addr, { hidden: !isIgnored(addr) });
+const aliasOf = (addr) => notes[normAddr(addr)]?.alias || "";
+const noteOf = (addr) => notes[normAddr(addr)]?.note || "";
+const isPinned = (addr) => !!notes[normAddr(addr)]?.pinned;
+const isIgnored = (addr) => !!notes[normAddr(addr)]?.hidden;
 
-async function disconnect() {
-  if (activeReader) await activeReader.cancel().catch(() => {});
-}
-
-async function readFrom(port) {
-  if (activePort) return;
-  try {
-    await port.open({ baudRate: BAUD_RATE });
-  } catch (err) {
-    setStatus(`Could not open the port (${err.message}). Close pio device monitor if it is running.`, false);
-    return;
-  }
-
-  await port.setSignals({ dataTerminalReady: true, requestToSend: true }).catch(() => {});
-  activePort = port;
-  connectedAt = Date.now();
-  bytesSinceConnect = 0;
-  setStatus("Connected. Waiting for the next sweep…", true);
-
-  const decoder = new TextDecoderStream();
-  const pipe = port.readable.pipeTo(decoder.writable).catch(() => {});
-  activeReader = decoder.readable.getReader();
-
-  let buffer = "";
-  try {
-    for (;;) {
-      const { value, done } = await activeReader.read();
-      if (done) break;
-      bytesSinceConnect += value.length;
-      buffer += value;
-      let newline;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        handleLine(buffer.slice(0, newline).trim());
-        buffer = buffer.slice(newline + 1);
-      }
-    }
-  } catch {
-    // Board unplugged or reset (e.g. while flashing).
-  } finally {
-    activeReader.releaseLock();
-    activeReader = null;
-    await pipe;
-    await port.close().catch(() => {});
-    activePort = null;
-    setStatus("Disconnected", false);
-  }
-}
-
-// ---------------------------------------------------------------- data -----
+// ---------------------------------------------------------------- service --
 
 const ADDR_KEY = { wifi: "bssid", ble: "addr", clients: "mac", aps: "bssid" };
 const addrOf = (type, e) => e[ADDR_KEY[type]];
 
-function recordHistory(addr, rssi) {
-  if (rssi == null) return;
-  const key = normAddr(addr);
-  let arr = history.get(key);
-  if (!arr) {
-    if (history.size >= HISTORY_ADDRS) history.delete(history.keys().next().value);
-    arr = [];
-    history.set(key, arr);
-  }
-  arr.push({ t: Date.now(), rssi });
-  if (arr.length > HISTORY_POINTS) arr.shift();
-}
-
-function mergeInto(type, items, idKey) {
-  const now = Date.now();
-  const entries = seen[type];
-  for (const item of items) {
-    const key = item[idKey];
-    if (key == null) continue;
-    const previous = entries.get(key);
-    entries.set(key, { ...item, firstSeen: previous?.firstSeen ?? now, lastSeen: now });
-    recordHistory(key, item.rssi);
-  }
-  sweepAt[type] = now;
-}
-
-function handleLine(line) {
-  if (!line.startsWith("{")) return;
-  let msg;
+async function poll() {
   try {
-    msg = JSON.parse(line);
+    const res = await fetch(`/api/state?window=${WINDOW_S}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const state = await res.json();
+    serviceUp = true;
+    serial = state.serial;
+    if (!frozen) apply(state);
   } catch {
-    return;
+    serviceUp = false;
   }
-
-  if (msg.t === "wifi" && Array.isArray(msg.items)) {
-    mergeInto("wifi", msg.items, "bssid");
-  } else if (msg.t === "ble" && Array.isArray(msg.items)) {
-    mergeInto("ble", msg.items, "addr");
-  } else if (msg.t === "monitor") {
-    mergeInto("clients", msg.clients ?? [], "mac");
-    mergeInto("aps", msg.aps ?? [], "bssid");
-    channels = msg.channels ?? [];
-    alerts = msg.alerts ?? [];
-  } else {
-    return;
-  }
-
-  lastMessage = { cycle: msg.cycle, up: msg.up, at: Date.now() };
-  if (activePort) setStatus("Connected", true);
+  updateStatus();
   if (!frozen) render();
+  if (serviceUp && !migrationChecked) {
+    migrationChecked = true;
+    offerLegacyImport();
+  }
 }
 
-function forgetOld(now) {
-  for (const entries of Object.values(seen)) {
-    for (const [key, entry] of entries) {
-      if (now - entry.lastSeen > FORGET_AFTER_MS) entries.delete(key);
+function apply(state) {
+  for (const type of Object.keys(seen)) {
+    const table = state.tables[type];
+    seen[type] = new Map(table.rows.map((e) => [normAddr(addrOf(type, e)), e]));
+  }
+  channels = state.channels;
+  alerts = state.alerts;
+  notes = state.annotations;
+  lastMessage = state.last;
+}
+
+function updateStatus() {
+  if (!serviceUp) {
+    setStatus("Can't reach the recon service. Start it with: python host/recon_service.py", false);
+  } else if (!serial.connected) {
+    setStatus(`Board not connected${serial.error ? ` (${serial.error})` : ""}. Showing recorded data.`, false);
+  } else {
+    const quiet = Date.now() - Math.max(serial.since, serial.lastLineAt);
+    setStatus(
+      quiet > SILENCE_WARNING_MS
+        ? `Connected to ${serial.port}, but the board has sent nothing for ${Math.round(quiet / 1000)}s. Try unplugging it and reconnecting.`
+        : `Recording from ${serial.port}${serial.banner ? ` · ${serial.banner}` : ""}`,
+      true,
+    );
+  }
+}
+
+// One-time offer to move aliases/notes/pins/hidden flags saved by the old,
+// localStorage-only page into the database. localStorage is left untouched.
+async function offerLegacyImport() {
+  if (localStorage.getItem(MIGRATED_FLAG)) return;
+  const legacy = {};
+  for (const [field, key] of Object.entries(LEGACY_KEYS)) {
+    try {
+      legacy[field] = JSON.parse(localStorage.getItem(key) || "{}");
+    } catch {
+      legacy[field] = {};
     }
+  }
+  const count = new Set(Object.values(legacy).flatMap((m) => Object.keys(m))).size;
+  if (!count) {
+    localStorage.setItem(MIGRATED_FLAG, "nothing");
+    return;
+  }
+  if (!confirm(`Import aliases, notes, pins and hidden flags for ${count} device(s) saved in this browser into the recon database?\n\nExisting database entries are never overwritten.`)) {
+    localStorage.setItem(MIGRATED_FLAG, "declined");
+    return;
+  }
+  try {
+    const res = await fetch("/api/annotations/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(legacy),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    localStorage.setItem(MIGRATED_FLAG, "imported");
+    poll();
+  } catch (err) {
+    // Flag not set, so the offer comes back on the next page load.
+    setStatus(`Import failed: ${err.message}`, false);
   }
 }
 
@@ -245,12 +170,10 @@ function matchesFilter(type, entry) {
 
 // Pinned first, then latest-sweep, then strongest signal.
 function ordered(type) {
-  const fresh = sweepAt[type];
   return [...seen[type].values()].sort((a, b) => {
     const ap = isPinned(addrOf(type, a)), bp = isPinned(addrOf(type, b));
     if (ap !== bp) return ap ? -1 : 1;
-    const af = a.lastSeen === fresh, bf = b.lastSeen === fresh;
-    if (af !== bf) return af ? -1 : 1;
+    if (a.fresh !== b.fresh) return a.fresh ? -1 : 1;
     return (b.rssi ?? -999) - (a.rssi ?? -999);
   });
 }
@@ -312,13 +235,13 @@ const AP_COLUMNS = [
 const TABLES = {
   wifi: WIFI_COLUMNS, ble: BLE_COLUMNS, clients: CLIENT_COLUMNS, aps: AP_COLUMNS,
 };
-const INTERNAL = new Set(["firstSeen", "lastSeen"]);
+// Fields the service adds to each record; not shown in the details panel.
+const INTERNAL = new Set(["firstSeen", "lastSeen", "fresh", "history"]);
 
 // ---------------------------------------------------------------- render ---
 
 function render() {
   const now = Date.now();
-  forgetOld(now);
 
   let hiddenTotal = 0;
   for (const [type, columns] of Object.entries(TABLES)) {
@@ -329,10 +252,6 @@ function render() {
 
   $("hidden-count").textContent = hiddenTotal ? `(${hiddenTotal})` : "";
   $("filter-info").textContent = filterText ? `filtering: “${filterText}”` : "";
-
-  if (activePort && bytesSinceConnect === 0 && now - connectedAt > SILENCE_WARNING_MS) {
-    setStatus("Connected, but the board has sent nothing. Try unplugging it and reconnecting.", true);
-  }
   $("meta").textContent = lastMessage
     ? `sweep #${lastMessage.cycle} · board up ${lastMessage.up}s · updated ${ago(now - lastMessage.at)}`
     : "";
@@ -354,7 +273,7 @@ function renderTable(type, columns, now) {
     return matchesFilter(type, e);
   });
 
-  const fresh = rows.filter((r) => r.lastSeen === sweepAt[type]).length;
+  const fresh = rows.filter((r) => r.fresh).length;
   const countEl = $(`${type}-count`);
   if (countEl) countEl.textContent = rows.length ? `${fresh} in last sweep, ${rows.length} shown` : "";
 
@@ -366,9 +285,9 @@ function renderTable(type, columns, now) {
     const td = document.createElement("td");
     td.className = "empty";
     td.colSpan = columns.length;
-    td.textContent = activePort
-      ? (filterText || hidden ? "No matching devices." : "Waiting for data…")
-      : "Connect the scanner to begin.";
+    td.textContent = filterText || hidden
+      ? "No matching devices."
+      : serial?.connected ? "Waiting for data…" : `Nothing recorded in the last ${WINDOW_S}s.`;
     tr.appendChild(td);
     body.replaceChildren(tr);
     return hidden;
@@ -383,7 +302,7 @@ function renderTable(type, columns, now) {
     const cls = [];
     if (isPinned(addr)) cls.push("pinned");
     if (isIgnored(addr)) cls.push("ignored");
-    if (entry.lastSeen !== sweepAt[type]) cls.push("stale");
+    if (!entry.fresh) cls.push("stale");
     tr.className = cls.join(" ");
     out.push(tr);
     if (expanded[type].has(id)) out.push(detailRow(type, entry, addr, extras, columns.length, now));
@@ -445,7 +364,7 @@ function detailRow(type, entry, addr, extras, span, now) {
 
   add("Alias", aliasOf(addr) || "—");
   add("Note", noteOf(addr) || "—");
-  add("First seen", `${ago(now - entry.firstSeen)} (tracked)`);
+  add("First seen", `${new Date(entry.firstSeen).toLocaleString()} (${ago(now - entry.firstSeen)})`);
   for (const key of extras) {
     const v = entry[key];
     add(key, Array.isArray(v) ? (v.length ? v.join(", ") : "—") : String(v));
@@ -532,7 +451,7 @@ function signalNode(entry) {
   if (rssi == null) return null;
   const frag = document.createDocumentFragment();
 
-  const samples = history.get(normAddr(addrOfAny(entry))) || [];
+  const samples = entry.history ?? [];
   if (samples.length >= 2) frag.append(sparkline(samples));
 
   const bar = document.createElement("span");
@@ -552,11 +471,6 @@ function signalNode(entry) {
     frag.append(badge);
   }
   return frag;
-}
-
-// The entry could come from any table; find whichever address field it carries.
-function addrOfAny(entry) {
-  return entry.bssid ?? entry.addr ?? entry.mac;
 }
 
 function sparkline(samples) {
@@ -665,8 +579,7 @@ function snapshot() {
     wifi: dump("wifi"),
     ble: dump("ble"),
     monitor: { clients: dump("clients"), aps: dump("aps"), channels, alerts },
-    aliases: store.alias,
-    notes: store.note,
+    annotations: notes,
   };
 }
 
@@ -686,19 +599,23 @@ function shortUuid(uuid) {
   const match = SIG_BASE_UUID.exec(uuid);
   return match ? `0x${match[1].toUpperCase()}` : uuid;
 }
+// First-seen times now span days, so scale the unit.
 function ago(ms) {
   const s = Math.round(ms / 1000);
-  return s < 2 ? "now" : `${s}s ago`;
+  if (s < 2) return "now";
+  if (s < 120) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 120) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 function setStatus(text, live) {
   $("status").textContent = text;
   $("dot").classList.toggle("live", live);
-  $("connect").textContent = live ? "Disconnect" : "Connect";
 }
 
 // ---------------------------------------------------------------- wiring ---
 
-$("connect").addEventListener("click", () => (activePort ? disconnect() : connect()));
 $("filter").addEventListener("input", (e) => {
   filterText = e.target.value.trim().toLowerCase();
   render();
@@ -715,21 +632,15 @@ $("show-hidden").addEventListener("change", (e) => {
 });
 $("export").addEventListener("click", downloadSnapshot);
 
-if ("serial" in navigator) {
-  navigator.serial.addEventListener("connect", (event) => readFrom(event.target));
-  navigator.serial.getPorts().then((ports) => {
-    if (ports.length) readFrom(ports[0]);
-  });
-}
-
 // Test/automation hook: drive investigation state without the DOM prompts.
 window.recon = {
-  setAlias, setNote, togglePin, toggleIgnore, snapshot,
+  setAlias, setNote, togglePin, toggleIgnore, snapshot, poll,
   setFilter: (t) => { filterText = String(t).toLowerCase(); render(); },
   setFrozen: (f) => { frozen = f; if (!f) render(); },
   setShowHidden: (v) => { showHidden = v; render(); },
-  feed: handleLine, state: { seen, store, history },
+  get state() { return { seen, notes, serial, serviceUp }; },
 };
 
-setInterval(() => { if (!frozen) render(); }, 1000);
-render();
+setInterval(poll, POLL_MS);
+setInterval(() => { if (!frozen) render(); }, 1000);  // Keeps "Ns ago" ticking.
+poll();

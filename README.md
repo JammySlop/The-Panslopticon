@@ -34,33 +34,77 @@ The C5 needs Arduino core 3.3+, so the project uses the community
 Tuning (scan mode, dwell time, BLE window, output format) lives in
 `include/config.h`.
 
-## Web interface
+## Host service and web interface
 
-`web/index.html` reads the board directly over USB with the Web Serial API. No
-server-side code and no network traffic from the board. It needs Chrome or
-Edge, and Web Serial only works on a secure origin, so serve it from
-localhost:
+`host/recon_service.py` runs on the computer the board is plugged into. It
+finds the board by USB ID, reads its JSON lines, records everything in a SQLite
+database, and serves the web page plus a small JSON API on localhost. It only
+reads from the serial port and never sends anything to the board. Recording
+continues whether or not a browser is open.
+
+One-time setup (needs Python 3.10+):
 
 ```powershell
-python -m http.server 8000 --bind 127.0.0.1 --directory C:\dev\nano-esp32\web
+cd C:\dev\nano-esp32
+python -m venv host\.venv
+host\.venv\Scripts\python.exe -m pip install -r host\requirements.txt
 ```
 
-Open http://localhost:8000, click **Connect**, and pick the board. After the
-first approval the page reconnects on its own, including after reflashing. On
-the C5 DevKit, use the USB port wired to the CH343 bridge ("USB-Enhanced-SERIAL
-CH343" in Device Manager).
+Run it:
 
-- Only one program can hold the COM port. Close `pio device monitor` before
-  connecting, and vice versa.
-- Rows from earlier sweeps stay on screen, dimmed, for 60 s. A single sweep
-  regularly misses weak transmitters.
+```powershell
+host\.venv\Scripts\python.exe host\recon_service.py            # auto-detects the board
+host\.venv\Scripts\python.exe host\recon_service.py --port COM8 # or name the port
+```
+
+Then open http://localhost:8000 in any browser. Use `localhost`, not
+`127.0.0.1`: the page's origin must match the one the old Web Serial page used
+so it can offer to import aliases saved there.
+
+- **The service holds the COM port.** Stop it (Ctrl+C) before
+  `pio run -t upload` or `pio device monitor`, then start it again. It
+  reconnects on its own if the board is unplugged and plugged back in.
+- On the C5 DevKit, use the USB port wired to the CH343 bridge
+  ("USB-Enhanced-SERIAL CH343" in Device Manager).
+- The page shows devices seen in the last 60 s (`WINDOW_S` in `web/app.js`);
+  rows missing from the latest sweep are dimmed. Older records stay in the
+  database.
+- The API and page answer only to `Host: localhost` / `127.0.0.1` on the
+  service's port, and the service binds to 127.0.0.1.
+
+### Database
+
+`data/recon.db` (change with `--db`; git-ignored). History is never deleted,
+which is roughly 20-30 MB per day of continuous scanning.
+
+| Table              | Contents                                                          |
+|--------------------|-------------------------------------------------------------------|
+| `sweeps`           | One row per message from the board: kind, host time, board cycle and uptime |
+| `devices`          | One row per device per table (`wifi`, `ble`, `clients`, `aps`): first/last seen and the latest record as JSON |
+| `sightings`        | Every appearance of a device in a sweep, with RSSI and channel    |
+| `channel_activity` | Monitor-mode packet counts per channel per sweep                  |
+| `alerts`           | Deauth-flood alerts                                               |
+| `annotations`      | Your aliases, notes, pins and hidden flags, keyed by address      |
+
+Times are milliseconds since the Unix epoch, host clock. The file is plain
+SQLite, so it can be queried directly, e.g.:
+
+```sql
+SELECT addr, datetime(first_seen / 1000, 'unixepoch', 'localtime') AS first,
+       json_extract(data, '$.ssid') AS ssid
+FROM devices WHERE kind = 'wifi' ORDER BY first_seen DESC LIMIT 20;
+```
+
+Tests: `host\.venv\Scripts\python.exe -m unittest discover -s host -v`.
 
 ### Investigating
 
-Client-side tools for working through what's nearby. Everything except live
-scan data is stored in the browser's `localStorage`, keyed by the normalized
-(uppercased) address, so a name you give a device shows up wherever that MAC
-appears — including across the WiFi, BLE, and monitor tables.
+Tools for working through what's nearby. Aliases, notes, pins and hidden flags
+are stored in the database, keyed by the normalized (uppercased) address, so a
+name you give a device shows up wherever that MAC appears, including across the
+WiFi, BLE, and monitor tables. The first time the page loads it offers to import
+anything saved by the older, browser-only version (kept in `localStorage`);
+existing database entries are never overwritten.
 
 - **Alias** a MAC/BSSID to a human name; the badge then follows that address
   everywhere.
@@ -69,11 +113,13 @@ appears — including across the WiFi, BLE, and monitor tables.
 - **Hide** devices you've identified as your own; "Show hidden" reveals them.
 - **Filter** box matches alias, address, SSID, name, vendor, note, and probed
   network names across every table at once.
-- **Signal sparkline** per device shows RSSI over recent sweeps — a rising line
+- **Signal sparkline** per device shows its last 40 RSSI readings from the
+  database, so it survives page reloads and service restarts. A rising line
   means you're getting closer, which helps physically locate a device.
-- **NEW** badge marks devices first seen in the last 20 s.
+- **NEW** badge marks devices first seen in the last 20 s. The details panel
+  shows the date a device was first ever recorded.
 - **Freeze** pauses updates so rows stop moving while you inspect.
-- **Export** downloads everything on screen (plus your aliases and notes) as a
+- **Export** downloads everything on screen (plus your annotations) as a
   timestamped JSON file for a report.
 
 Per-device actions live behind the ▸ toggle on each row.
