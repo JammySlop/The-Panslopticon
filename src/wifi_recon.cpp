@@ -17,11 +17,18 @@ const char* authModeName(wifi_auth_mode_t mode) {
         case WIFI_AUTH_WPA_PSK:         return "WPA";
         case WIFI_AUTH_WPA2_PSK:        return "WPA2";
         case WIFI_AUTH_WPA_WPA2_PSK:    return "WPA/WPA2";
+        case WIFI_AUTH_WPA_ENTERPRISE:  return "WPA-ENT";
         case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2-ENT";
-        case WIFI_AUTH_WPA3_PSK:        return "WPA3";
-        case WIFI_AUTH_WPA2_WPA3_PSK:   return "WPA2/WPA3";
-        case WIFI_AUTH_WAPI_PSK:        return "WAPI";
+        case WIFI_AUTH_WPA3_PSK:
+        case WIFI_AUTH_WPA3_EXT_PSK:    return "WPA3";
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+        case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE: return "WPA2/WPA3";
+        case WIFI_AUTH_WPA3_ENTERPRISE: return "WPA3-ENT";
+        case WIFI_AUTH_WPA2_WPA3_ENTERPRISE: return "WPA2/WPA3-ENT";
         case WIFI_AUTH_WPA3_ENT_192:    return "WPA3-ENT192";
+        case WIFI_AUTH_OWE:             return "OWE";  // Encrypted, but no password.
+        case WIFI_AUTH_DPP:             return "DPP";
+        case WIFI_AUTH_WAPI_PSK:        return "WAPI";
         default:                        return "?";
     }
 }
@@ -61,10 +68,19 @@ void addDetails(int index, WifiNetwork& n) {
     n.groupCipher = cipherName(rec->group_cipher);
     n.wps = rec->wps;
 
+    // Slash-separated because the 5 GHz modes ("ac", "ax") are two letters.
     String phy;
-    if (rec->phy_11b) phy += 'b';
-    if (rec->phy_11g) phy += 'g';
-    if (rec->phy_11n) phy += 'n';
+    auto add = [&phy](bool on, const char* mode) {
+        if (!on) return;
+        if (!phy.isEmpty()) phy += '/';
+        phy += mode;
+    };
+    add(rec->phy_11a, "a");
+    add(rec->phy_11b, "b");
+    add(rec->phy_11g, "g");
+    add(rec->phy_11n, "n");
+    add(rec->phy_11ac, "ac");
+    add(rec->phy_11ax, "ax");
     if (rec->phy_lr) phy += "+lr";
     n.phy = phy;
 
@@ -80,6 +96,11 @@ void addDetails(int index, WifiNetwork& n) {
 void begin() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();  // Scan only. This device never joins a network.
+#if SOC_WIFI_SUPPORT_5G
+    // Scans and monitor-mode channel hops cover both bands. Without this the
+    // driver may stay on 2.4 GHz and reject 5 GHz channels.
+    WiFi.setBandMode(WIFI_BAND_MODE_AUTO);
+#endif
 }
 
 std::vector<WifiNetwork> scan() {

@@ -9,10 +9,16 @@
 // DOM via textContent. User-entered aliases/notes are also set via textContent.
 // Never introduce innerHTML.
 
-const NANO_ESP32 = { usbVendorId: 0x2341, usbProductId: 0x0070 };
+// USB IDs offered in the port picker.
+const BOARD_FILTERS = [
+  { usbVendorId: 0x2341, usbProductId: 0x0070 }, // Arduino Nano ESP32 (native USB)
+  { usbVendorId: 0x1a86, usbProductId: 0x55d3 }, // ESP32-C5-DevKitC-1 UART port (CH343)
+  { usbVendorId: 0x303a, usbProductId: 0x1001 }, // ESP32-C5 native USB Serial/JTAG port
+];
 const BAUD_RATE = 115200;
 const FORGET_AFTER_MS = 60_000;
-const SILENCE_WARNING_MS = 20_000;
+// A dual-band WiFi scan (ESP32-C5) prints nothing for ~17 s, so allow longer.
+const SILENCE_WARNING_MS = 30_000;
 const NEW_DEVICE_MS = 20_000;        // First-seen within this window gets a NEW badge.
 const HISTORY_POINTS = 40;           // RSSI samples kept per address for the sparkline.
 const HISTORY_ADDRS = 600;           // Cap on tracked addresses (bounds memory).
@@ -103,7 +109,7 @@ async function connect() {
     return;
   }
   try {
-    const port = await navigator.serial.requestPort({ filters: [NANO_ESP32] });
+    const port = await navigator.serial.requestPort({ filters: BOARD_FILTERS });
     await readFrom(port);
   } catch (err) {
     if (err.name !== "NotFoundError") setStatus(err.message, false);
@@ -252,12 +258,15 @@ function ordered(type) {
 // --------------------------------------------------------------- columns ---
 
 const text = (v) => (v == null || v === "" ? null : String(v));
+// 2.4 GHz uses channels 1-14; every 5 GHz channel number is 32 or higher.
+const bandOf = (ch) => (ch == null ? null : ch > 14 ? "5 GHz" : "2.4 GHz");
 
 const WIFI_COLUMNS = [
   { label: "SSID", key: "ssid", get: (e) => e.ssid, placeholder: "hidden" },
   { label: "BSSID", key: "bssid", cls: "mono", addr: true, get: (e) => e.bssid },
   { label: "Signal", key: "rssi", node: (e) => signalNode(e) },
   { label: "Ch", key: "ch", get: (e) => e.ch },
+  { label: "Band", key: "ch", get: (e) => bandOf(e.ch) },
   { label: "Security", key: "auth", get: (e) => e.auth },
   { label: "Cipher", key: "cipher", get: (e) => text(e.cipher), placeholder: "—" },
   { label: "WPS", key: "wps", get: (e) => (e.wps ? "on" : null), placeholder: "—" },

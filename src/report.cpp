@@ -191,14 +191,13 @@ void printMonitorJson(uint32_t cycle, const MonitorReport& mon) {
 
     out += "],\"channels\":[";
     bool firstCh = true;
-    for (int ch = 1; ch <= 13; ++ch) {
-        if (mon.channelPackets[ch] == 0) continue;
+    for (const auto& [ch, pkts] : mon.channelPackets) {
         if (!firstCh) out += ',';
         firstCh = false;
         out += "{\"ch\":";
         out += ch;
         out += ",\"pkts\":";
-        out += mon.channelPackets[ch];
+        out += pkts;
         out += '}';
     }
     out += "]}";

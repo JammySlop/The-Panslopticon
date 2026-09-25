@@ -16,13 +16,15 @@ BLEScan* scanner = nullptr;
 
 // Random and resolvable-private addresses rotate every few minutes, so the same
 // phone can appear as a "new" device. Public addresses are stable.
-const char* addressTypeName(esp_ble_addr_type_t type) {
+// These are the raw HCI address-type values, which Bluedroid (ESP32-S3) and
+// NimBLE (ESP32-C5) both report, so no stack-specific enum is needed.
+const char* addressTypeName(uint8_t type) {
     switch (type) {
-        case BLE_ADDR_TYPE_PUBLIC:     return "public";
-        case BLE_ADDR_TYPE_RANDOM:     return "random";
-        case BLE_ADDR_TYPE_RPA_PUBLIC: return "rpa-pub";
-        case BLE_ADDR_TYPE_RPA_RANDOM: return "rpa-rnd";
-        default:                       return "?";
+        case 0:  return "public";
+        case 1:  return "random";
+        case 2:  return "rpa-pub";
+        case 3:  return "rpa-rnd";
+        default: return "?";
     }
 }
 
@@ -69,8 +71,8 @@ const char* appearanceName(uint16_t a) {
 
 // Names the product family from the Apple manufacturer-data subtype byte. Apple
 // devices broadcast one of these constantly even as their address rotates.
-const char* appleProduct(const std::string& mfg) {
-    if (mfg.size() < 3) return "";
+const char* appleProduct(const String& mfg) {
+    if (mfg.length() < 3) return "";
     switch (static_cast<uint8_t>(mfg[2])) {
         case 0x02: return "iBeacon";
         case 0x05: return "AirDrop";
@@ -84,8 +86,8 @@ const char* appleProduct(const std::string& mfg) {
     }
 }
 
-String manufacturerOf(BLEAdvertisedDevice& dev, const std::string& mfg) {
-    if (mfg.size() < 2) return String();
+String manufacturerOf(const String& mfg) {
+    if (mfg.length() < 2) return String();
     const uint16_t id = static_cast<uint8_t>(mfg[0]) |
                         (static_cast<uint8_t>(mfg[1]) << 8);
     if (const char* company = companyName(id)) return String(company);
@@ -105,16 +107,17 @@ bool estimateDistance(BLEAdvertisedDevice& dev, float& out) {
 
 BleDevice toRecord(BLEAdvertisedDevice& dev) {
     BleDevice rec;
-    rec.address = dev.getAddress().toString().c_str();
+    rec.address = dev.getAddress().toString();
     rec.addressType = addressTypeName(dev.getAddressType());
     rec.rssi = dev.getRSSI();
-    rec.name = dev.haveName() ? dev.getName().c_str() : "";
+    rec.name = dev.haveName() ? dev.getName() : String();
 
-    const std::string mfg = dev.haveManufacturerData() ? dev.getManufacturerData()
-                                                       : std::string();
-    rec.manufacturer = mfg.empty() ? String() : manufacturerOf(dev, mfg);
+    // Manufacturer data is binary; String holds it with an explicit length, so
+    // embedded zero bytes are kept.
+    const String mfg = dev.haveManufacturerData() ? dev.getManufacturerData() : String();
+    rec.manufacturer = mfg.isEmpty() ? String() : manufacturerOf(mfg);
     // Apple's company ID is 0x004C, little-endian 0x4C 0x00.
-    if (mfg.size() >= 3 && static_cast<uint8_t>(mfg[0]) == 0x4C &&
+    if (mfg.length() >= 3 && static_cast<uint8_t>(mfg[0]) == 0x4C &&
         static_cast<uint8_t>(mfg[1]) == 0x00) {
         rec.product = appleProduct(mfg);
     }
@@ -126,7 +129,7 @@ BleDevice toRecord(BLEAdvertisedDevice& dev) {
     if (dev.haveAppearance()) rec.appearance = appearanceName(dev.getAppearance());
 
     for (int i = 0; i < dev.getServiceUUIDCount(); ++i) {
-        rec.services.push_back(dev.getServiceUUID(i).toString().c_str());
+        rec.services.push_back(dev.getServiceUUID(i).toString());
     }
     return rec;
 }
@@ -142,12 +145,13 @@ void begin() {
 }
 
 std::vector<BleDevice> scan() {
-    BLEScanResults results = scanner->start(config::kBleScanSeconds, false);
-
     std::vector<BleDevice> devices;
-    devices.reserve(results.getCount());
-    for (int i = 0; i < results.getCount(); ++i) {
-        BLEAdvertisedDevice dev = results.getDevice(i);
+    BLEScanResults* results = scanner->start(config::kBleScanSeconds, false);
+    if (results == nullptr) return devices;
+
+    devices.reserve(results->getCount());
+    for (int i = 0; i < results->getCount(); ++i) {
+        BLEAdvertisedDevice dev = results->getDevice(i);
         devices.push_back(toRecord(dev));
     }
     scanner->clearResults();  // Free the result buffer before the next cycle.

@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <esp_wifi_types.h>
 
+#include <map>
 #include <vector>
 
 // --- Tier 1: fields the scans already receive ------------------------------
@@ -12,13 +13,13 @@ struct WifiNetwork {
     String ssid;  // Empty for hidden networks.
     String bssid;
     int rssi;
-    int channel;
+    int channel;  // 1-14 is 2.4 GHz, 36 and up is 5 GHz.
     wifi_auth_mode_t auth;
 
     const char* pairwiseCipher;  // "CCMP", "TKIP", ...
     const char* groupCipher;
     bool wps;                    // WPS enabled: a common weak point.
-    String phy;                  // e.g. "bgn", "n", "ax".
+    String phy;                  // e.g. "b/g/n", "a/n/ac/ax".
     String country;              // Advertised regulatory domain, or "".
     String vendor;               // From the BSSID OUI, or "".
 };
@@ -73,5 +74,7 @@ struct MonitorReport {
     std::vector<ProbingClient> clients;
     std::vector<ApTraffic> aps;
     std::vector<SecurityAlert> alerts;
-    uint32_t channelPackets[14];  // Index 1..13; packets seen per channel.
+    // Packets seen per channel. A map because 5 GHz channel numbers are sparse
+    // (36, 40, ... 165); ordered so the report lists 2.4 GHz first.
+    std::map<uint8_t, uint32_t> channelPackets;
 };

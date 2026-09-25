@@ -158,7 +158,7 @@ MonitorReport sweep() {
     auto drain = [&]() {
         CapEvent ev;
         while (xQueueReceive(queue, &ev, 0) == pdTRUE) {
-            if (ev.channel >= 14) continue;
+            if (ev.channel == 0) continue;
             report.channelPackets[ev.channel]++;
 
             const String ssid = ev.ssidLen ? String(ev.ssid).substring(0, ev.ssidLen)
@@ -206,9 +206,11 @@ MonitorReport sweep() {
     esp_wifi_set_promiscuous(false);
     drain();  // Anything queued during teardown.
 
-    // Build the report, capped so a busy environment can't exhaust memory.
+    // Build the report, then sort and cap it so a busy environment can't flood
+    // the output. Capping after sorting keeps the strongest clients and the
+    // busiest APs, not whichever sorted first by MAC.
+    report.clients.reserve(clients.size());
     for (auto& [mac, c] : clients) {
-        if (report.clients.size() >= config::kMaxMonitorClients) break;
         ProbingClient pc;
         pc.mac = mac;
         pc.vendor = oui::vendorFromString(mac);
@@ -218,8 +220,8 @@ MonitorReport sweep() {
         pc.probedSsids.assign(c.ssids.begin(), c.ssids.end());
         report.clients.push_back(std::move(pc));
     }
+    report.aps.reserve(aps.size());
     for (auto& [bssid, a] : aps) {
-        if (report.aps.size() >= config::kMaxMonitorAps) break;
         ApTraffic at;
         at.bssid = bssid;
         at.ssid = a.ssid;
@@ -236,7 +238,14 @@ MonitorReport sweep() {
     std::sort(report.clients.begin(), report.clients.end(),
               [](const ProbingClient& a, const ProbingClient& b) { return a.rssi > b.rssi; });
     std::sort(report.aps.begin(), report.aps.end(),
-              [](const ApTraffic& a, const ApTraffic& b) { return a.clientCount > b.clientCount; });
+              [](const ApTraffic& a, const ApTraffic& b) {
+                  if (a.clientCount != b.clientCount) return a.clientCount > b.clientCount;
+                  return a.frames > b.frames;
+              });
+    if (report.clients.size() > config::kMaxMonitorClients) {
+        report.clients.resize(config::kMaxMonitorClients);
+    }
+    if (report.aps.size() > config::kMaxMonitorAps) report.aps.resize(config::kMaxMonitorAps);
     return report;
 }
 

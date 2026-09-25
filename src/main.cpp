@@ -24,7 +24,9 @@ void setup() {
     Serial.begin(config::kSerialBaud);
     waitForSerial();
 
-    Serial.println("\n=== Nano ESP32 WiFi/BLE recon ===");
+    Serial.printf("\n=== %s WiFi/BLE recon (%s) ===\n", ESP.getChipModel(),
+                  config::kDualBand ? "2.4 + 5 GHz" : "2.4 GHz");
+    Serial.printf("PSRAM: %lu KB\n", static_cast<unsigned long>(ESP.getPsramSize() / 1024));
     wifi_recon::begin();
     ble_recon::begin();
     monitor::begin();
