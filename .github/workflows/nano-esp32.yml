@@ -1,9 +1,15 @@
-name: CI
+name: nano-esp32
 
 on:
   push:
     branches: ["**"]
+    paths: ["nano-esp32/**", ".github/workflows/nano-esp32.yml"]
   pull_request:
+    paths: ["nano-esp32/**", ".github/workflows/nano-esp32.yml"]
+
+defaults:
+  run:
+    working-directory: nano-esp32
 
 jobs:
   build:
@@ -19,7 +25,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('nano-esp32/platformio.ini') }}
 
       - name: Install PlatformIO Core
         run: pip install --upgrade platformio

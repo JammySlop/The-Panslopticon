@@ -45,7 +45,7 @@ continues whether or not a browser is open.
 One-time setup (needs Python 3.10+):
 
 ```powershell
-cd C:\dev\nano-esp32
+cd nano-esp32   # from the repository root
 python -m venv host\.venv
 host\.venv\Scripts\python.exe -m pip install -r host\requirements.txt
 ```
