@@ -1,16 +1,16 @@
 "use strict";
 
-// Renders what the host recon service (host/recon_service.py) has recorded,
-// plus the investigation layer: aliases, notes, pins, hide, filter, signal
-// sparklines, and export. The service owns the serial port and the SQLite
-// database; this page only polls /api/state and writes annotations back.
+// Renders everything the host recon service (host/recon_service.py) has
+// recorded, plus the investigation layer: aliases, notes, pins, hide, filter,
+// signal sparklines, and export. The service owns the serial port and the
+// SQLite database. This page loads every device once, then polls for devices
+// updated since the last sweep it has, and writes annotations back.
 //
 // Every broadcast string (SSIDs, BLE names, probed network names) reaches the
 // DOM via textContent. User-entered aliases/notes are also set via textContent.
 // Never introduce innerHTML.
 
 const POLL_MS = 2000;
-const WINDOW_S = 60;                 // Show devices seen within this many seconds.
 // A dual-band WiFi scan (ESP32-C5) prints nothing for ~17 s, so allow longer.
 const SILENCE_WARNING_MS = 30_000;
 const NEW_DEVICE_MS = 20_000;        // First-seen within this window gets a NEW badge.
@@ -20,8 +20,11 @@ const SIG_BASE_UUID = /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i;
 const LEGACY_KEYS = { alias: "recon.alias", note: "recon.note", pin: "recon.pin", ignore: "recon.ignore" };
 const MIGRATED_FLAG = "recon.migratedToDb";
 
+// Mirror of the database's devices table, per page table: normAddr -> record.
 const seen = { wifi: new Map(), ble: new Map(), clients: new Map(), aps: new Map() };
+const latestSweep = { wifi: 0, ble: 0, clients: 0, aps: 0 };
 const expanded = { wifi: new Set(), ble: new Set(), clients: new Set(), aps: new Set() };
+let cursor = null;          // Newest sweep id merged into `seen`; null = load everything.
 let channels = [];
 let alerts = [];
 let lastMessage = null;
@@ -72,35 +75,54 @@ const isIgnored = (addr) => !!notes[normAddr(addr)]?.hidden;
 
 const ADDR_KEY = { wifi: "bssid", ble: "addr", clients: "mac", aps: "bssid" };
 const addrOf = (type, e) => e[ADDR_KEY[type]];
+// In the table's most recent sweep. Computed here, not by the service, because
+// a cached record goes stale when a newer sweep arrives without it.
+const isFresh = (type, e) => e.lastSweep === latestSweep[type];
 
 async function poll() {
   try {
-    const res = await fetch(`/api/state?window=${WINDOW_S}`, { cache: "no-store" });
+    const url = cursor == null ? "/api/state" : `/api/state?after=${cursor}`;
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const state = await res.json();
     serviceUp = true;
     serial = state.serial;
-    if (!frozen) apply(state);
+    // While frozen, nothing is merged and the cursor stays put, so the first
+    // poll after unfreezing fetches everything that changed meanwhile.
+    if (!frozen && apply(state)) render();
   } catch {
     serviceUp = false;
   }
   updateStatus();
-  if (!frozen) render();
   if (serviceUp && !migrationChecked) {
     migrationChecked = true;
     offerLegacyImport();
   }
 }
 
+// Merges one /api/state response. Returns true if anything visible changed.
 function apply(state) {
+  if (cursor != null && state.cursor < cursor) {
+    // The database was replaced (sweep ids went backwards): start over.
+    for (const map of Object.values(seen)) map.clear();
+    cursor = null;
+    poll();
+    return false;
+  }
+  let changed = cursor == null || state.cursor !== cursor;
   for (const type of Object.keys(seen)) {
     const table = state.tables[type];
-    seen[type] = new Map(table.rows.map((e) => [normAddr(addrOf(type, e)), e]));
+    for (const e of table.rows) seen[type].set(normAddr(addrOf(type, e)), e);
+    latestSweep[type] = table.latestSweep;
   }
+  const annotations = JSON.stringify(state.annotations);
+  if (annotations !== JSON.stringify(notes)) changed = true;
+  cursor = state.cursor;
   channels = state.channels;
   alerts = state.alerts;
   notes = state.annotations;
   lastMessage = state.last;
+  return changed;
 }
 
 function updateStatus() {
@@ -173,7 +195,7 @@ function ordered(type) {
   return [...seen[type].values()].sort((a, b) => {
     const ap = isPinned(addrOf(type, a)), bp = isPinned(addrOf(type, b));
     if (ap !== bp) return ap ? -1 : 1;
-    if (a.fresh !== b.fresh) return a.fresh ? -1 : 1;
+    if (isFresh(type, a) !== isFresh(type, b)) return isFresh(type, a) ? -1 : 1;
     return (b.rssi ?? -999) - (a.rssi ?? -999);
   });
 }
@@ -236,7 +258,7 @@ const TABLES = {
   wifi: WIFI_COLUMNS, ble: BLE_COLUMNS, clients: CLIENT_COLUMNS, aps: AP_COLUMNS,
 };
 // Fields the service adds to each record; not shown in the details panel.
-const INTERNAL = new Set(["firstSeen", "lastSeen", "fresh", "history"]);
+const INTERNAL = new Set(["firstSeen", "lastSeen", "lastSweep", "history"]);
 
 // ---------------------------------------------------------------- render ---
 
@@ -252,6 +274,16 @@ function render() {
 
   $("hidden-count").textContent = hiddenTotal ? `(${hiddenTotal})` : "";
   $("filter-info").textContent = filterText ? `filtering: “${filterText}”` : "";
+  tick();
+}
+
+// Updates the relative times in place once a second. Re-rendering thousands of
+// rows just to advance "Ns ago" would be wasteful.
+function tick() {
+  const now = Date.now();
+  for (const td of document.querySelectorAll("td.age[data-ts]")) {
+    td.textContent = ago(now - Number(td.dataset.ts));
+  }
   $("meta").textContent = lastMessage
     ? `sweep #${lastMessage.cycle} · board up ${lastMessage.up}s · updated ${ago(now - lastMessage.at)}`
     : "";
@@ -273,7 +305,7 @@ function renderTable(type, columns, now) {
     return matchesFilter(type, e);
   });
 
-  const fresh = rows.filter((r) => r.fresh).length;
+  const fresh = rows.filter((r) => isFresh(type, r)).length;
   const countEl = $(`${type}-count`);
   if (countEl) countEl.textContent = rows.length ? `${fresh} in last sweep, ${rows.length} shown` : "";
 
@@ -287,7 +319,7 @@ function renderTable(type, columns, now) {
     td.colSpan = columns.length;
     td.textContent = filterText || hidden
       ? "No matching devices."
-      : serial?.connected ? "Waiting for data…" : `Nothing recorded in the last ${WINDOW_S}s.`;
+      : serial?.connected ? "Waiting for data…" : "Nothing recorded yet.";
     tr.appendChild(td);
     body.replaceChildren(tr);
     return hidden;
@@ -302,7 +334,7 @@ function renderTable(type, columns, now) {
     const cls = [];
     if (isPinned(addr)) cls.push("pinned");
     if (isIgnored(addr)) cls.push("ignored");
-    if (!entry.fresh) cls.push("stale");
+    if (!isFresh(type, entry)) cls.push("stale");
     tr.className = cls.join(" ");
     out.push(tr);
     if (expanded[type].has(id)) out.push(detailRow(type, entry, addr, extras, columns.length, now));
@@ -327,6 +359,7 @@ function buildRow(type, columns, entry, now, addr, id) {
 
     if (col.age) {
       td.className = "age";
+      td.dataset.ts = entry.lastSeen;
       td.append(ago(now - entry.lastSeen));
     } else if (col.node) {
       const n = col.node(entry);
@@ -642,5 +675,5 @@ window.recon = {
 };
 
 setInterval(poll, POLL_MS);
-setInterval(() => { if (!frozen) render(); }, 1000);  // Keeps "Ns ago" ticking.
+setInterval(tick, 1000);
 poll();

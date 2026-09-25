@@ -7,8 +7,10 @@ never sends anything to the board.
     python host/recon_service.py [--port COM8] [--db data/recon.db] [--http-port 8000]
 
 API (localhost only):
-    GET  /api/state?window=SECONDS   devices seen in the window, latest monitor
-                                     sweep, annotations, and serial status
+    GET  /api/state[?after=SWEEP_ID]  every recorded device, or only those
+                                     updated after the given sweep; plus the
+                                     latest monitor sweep, annotations, and
+                                     serial status
     PUT  /api/annotations/<addr>     update alias/note/pinned/hidden for an address
     POST /api/annotations/import     merge the page's old localStorage data
 """
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import socket
 import sqlite3
 import threading
 import time
@@ -47,8 +50,6 @@ MAX_LINE_BYTES = 256 * 1024  # A monitor line is ~10 KB; anything huge is garbag
 RETRY_S = 2
 
 HISTORY_POINTS = 40        # RSSI samples returned per device for the sparkline.
-DEFAULT_WINDOW_S = 60      # /api/state returns devices seen this recently.
-MAX_WINDOW_S = 30 * 24 * 3600
 MAX_BODY_BYTES = 1024 * 1024
 MAX_ADDR = 64
 MAX_ALIAS = 100
@@ -63,7 +64,7 @@ TABLES = {
 }
 SWEEP_KINDS = ("wifi", "ble", "monitor")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 
@@ -88,7 +89,9 @@ CREATE TABLE IF NOT EXISTS devices (
     data       TEXT    NOT NULL,     -- latest record from the board, as JSON
     PRIMARY KEY (kind, addr)
 );
-CREATE INDEX IF NOT EXISTS devices_recent ON devices(kind, last_seen);
+-- The page polls for devices updated after the last sweep it has seen.
+DROP INDEX IF EXISTS devices_recent;
+CREATE INDEX IF NOT EXISTS devices_updated ON devices(kind, last_sweep);
 
 -- Every time a device appeared in a sweep. Kept forever.
 CREATE TABLE IF NOT EXISTS sightings (
@@ -252,11 +255,17 @@ class Store:
 
     # --- reads for the page -------------------------------------------------
 
-    def state(self, window_s: int = DEFAULT_WINDOW_S, at: int | None = None) -> dict:
+    def state(self, after: int | None = None, at: int | None = None) -> dict:
+        """Every recorded device, or with `after`, only devices updated in a
+        sweep newer than that sweep id. `cursor` in the result is the value to
+        pass as `after` next time. Sweep ids are used rather than timestamps
+        because they are assigned inside the writing transaction, so a sweep
+        committed while a poll is running is picked up by the next poll."""
         at = now_ms() if at is None else at
-        since = at - window_s * 1000
 
         with self.session() as db:
+            db.execute("BEGIN")  # One snapshot for all the reads below.
+            cursor = db.execute("SELECT COALESCE(MAX(id), 0) FROM sweeps").fetchone()[0]
             latest = {
                 kind: db.execute(
                     "SELECT id, at, cycle, up FROM sweeps WHERE kind = ? ORDER BY id DESC LIMIT 1",
@@ -271,16 +280,16 @@ class Store:
                 rows = []
                 for r in db.execute(
                     "SELECT addr, first_seen, last_seen, last_sweep, data FROM devices"
-                    " WHERE kind = ? AND last_seen >= ?",
-                    (table, since),
+                    " WHERE kind = ? AND last_sweep > ?",
+                    (table, after or 0),
                 ):
                     entry = json.loads(r["data"])
                     entry["firstSeen"] = r["first_seen"]
                     entry["lastSeen"] = r["last_seen"]
-                    entry["fresh"] = sweep is not None and r["last_sweep"] == sweep["id"]
+                    entry["lastSweep"] = r["last_sweep"]
                     entry["history"] = self._history(db, table, r["addr"])
                     rows.append(entry)
-                tables[table] = {"sweepAt": sweep["at"] if sweep else 0, "rows": rows}
+                tables[table] = {"latestSweep": sweep["id"] if sweep else 0, "rows": rows}
 
             channels, alerts = [], []
             if monitor := latest["monitor"]:
@@ -309,7 +318,7 @@ class Store:
 
         return {
             "now": at,
-            "window": window_s,
+            "cursor": cursor,
             "last": {"cycle": newest["cycle"], "up": newest["up"], "at": newest["at"]} if newest else None,
             "tables": tables,
             "channels": channels,
@@ -483,13 +492,18 @@ class ReconServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address, store: Store, status: SerialStatus):
+        # "localhost" resolves to ::1 before 127.0.0.1 on Windows, and a client
+        # that finds nothing on ::1 waits ~2 s before falling back, so main()
+        # runs one server per loopback address.
+        if ":" in address[0]:
+            self.address_family = socket.AF_INET6
         super().__init__(address, Handler)
         self.store = store
         self.status = status
         port = self.server_address[1]
         # Rejecting other Host headers stops DNS-rebinding pages from reading
         # the API through the browser.
-        self.allowed_hosts = {f"localhost:{port}", f"127.0.0.1:{port}"}
+        self.allowed_hosts = {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -512,12 +526,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         url = urlsplit(self.path)
         if url.path == "/api/state":
-            try:
-                window = int(parse_qs(url.query).get("window", [DEFAULT_WINDOW_S])[0])
-            except ValueError:
-                return self._json(HTTPStatus.BAD_REQUEST, {"error": "window must be an integer"})
-            window = max(1, min(window, MAX_WINDOW_S))
-            body = self.server.store.state(window)
+            after = parse_qs(url.query).get("after", [None])[0]
+            if after is not None and not after.isdigit():
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "after must be a sweep id"})
+            body = self.server.store.state(int(after) if after is not None else None)
             body["serial"] = self.server.status.snapshot()
             return self._json(HTTPStatus.OK, body)
         if url.path.startswith("/api/"):
@@ -616,15 +628,25 @@ def main(argv=None) -> None:
                               name="serial", daemon=True)
     reader.start()
 
-    server = ReconServer(("127.0.0.1", args.http_port), store, status)
+    servers = [ReconServer(("127.0.0.1", args.http_port), store, status)]
+    try:
+        servers.append(ReconServer(("::1", args.http_port), store, status))
+    except OSError as err:  # IPv6 disabled: IPv4 alone still works, just slower via "localhost".
+        log.warning("Not listening on [::1]: %s", err)
+    for extra in servers[1:]:
+        threading.Thread(target=extra.serve_forever, name="http-v6", daemon=True).start()
+
     log.info("Open http://localhost:%d  (database: %s)", args.http_port, args.db)
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
-        server.server_close()
+        for server in servers[1:]:
+            server.shutdown()
+        for server in servers:
+            server.server_close()
         reader.join(timeout=3)
 
 

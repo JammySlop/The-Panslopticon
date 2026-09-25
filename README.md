@@ -66,9 +66,10 @@ so it can offer to import aliases saved there.
   reconnects on its own if the board is unplugged and plugged back in.
 - On the C5 DevKit, use the USB port wired to the CH343 bridge
   ("USB-Enhanced-SERIAL CH343" in Device Manager).
-- The page shows devices seen in the last 60 s (`WINDOW_S` in `web/app.js`);
-  rows missing from the latest sweep are dimmed. Older records stay in the
-  database.
+- The page shows every device in the database. It loads everything once, then
+  fetches only devices updated since the last sweep it has. Rows missing from
+  the latest sweep are dimmed; "Last seen" says how long ago they were heard.
+  Use the filter box to narrow things down.
 - The API and page answer only to `Host: localhost` / `127.0.0.1` on the
   service's port, and the service binds to 127.0.0.1.
 

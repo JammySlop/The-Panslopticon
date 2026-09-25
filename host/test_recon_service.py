@@ -34,23 +34,36 @@ class StoreTest(unittest.TestCase):
     def test_first_seen_survives_later_sweeps(self):
         self.store.ingest(WIFI, at=1_000)
         self.store.ingest({**WIFI, "cycle": 2, "items": WIFI["items"][:1]}, at=5_000)
-        rows = {r["bssid"].upper(): r for r in self.store.state(60, at=6_000)["tables"]["wifi"]["rows"]}
+        wifi = self.store.state(at=6_000)["tables"]["wifi"]
+        rows = {r["bssid"].upper(): r for r in wifi["rows"]}
 
         home = rows["AA:BB:CC:00:00:01"]
         self.assertEqual((home["firstSeen"], home["lastSeen"]), (1_000, 5_000))
-        self.assertTrue(home["fresh"])
+        self.assertEqual(home["lastSweep"], wifi["latestSweep"])
         self.assertEqual([h["rssi"] for h in home["history"]], [-50, -50])
-        # Seen in the earlier sweep only: still listed, but not fresh.
-        self.assertFalse(rows["AA:BB:CC:00:00:02"]["fresh"])
+        # Seen in the earlier sweep only: still returned, but not in the latest sweep.
+        self.assertLess(rows["AA:BB:CC:00:00:02"]["lastSweep"], wifi["latestSweep"])
 
-    def test_window_excludes_old_devices(self):
+    def test_everything_is_returned_however_old(self):
         self.store.ingest(WIFI, at=1_000)
-        self.assertEqual(len(self.store.state(60, at=61_000)["tables"]["wifi"]["rows"]), 2)
-        self.assertEqual(self.store.state(60, at=61_001)["tables"]["wifi"]["rows"], [])
+        rows = self.store.state(at=1_000 + 365 * 24 * 3600 * 1000)["tables"]["wifi"]["rows"]
+        self.assertEqual(len(rows), 2)
+
+    def test_after_returns_only_devices_updated_since_cursor(self):
+        self.store.ingest(WIFI, at=1_000)
+        first = self.store.state()
+        self.store.ingest({**WIFI, "items": WIFI["items"][:1]}, at=2_000)
+        self.store.ingest(BLE, at=3_000)
+        delta = self.store.state(after=first["cursor"])
+
+        self.assertEqual([r["bssid"] for r in delta["tables"]["wifi"]["rows"]], ["aa:bb:cc:00:00:01"])
+        self.assertEqual(len(delta["tables"]["ble"]["rows"]), 1)
+        self.assertGreater(delta["cursor"], first["cursor"])
+        self.assertEqual(self.store.state(after=delta["cursor"])["tables"]["wifi"]["rows"], [])
 
     def test_monitor_message_fills_clients_aps_channels_alerts(self):
         self.store.ingest(MONITOR, at=1_000)
-        s = self.store.state(60, at=2_000)
+        s = self.store.state(at=2_000)
         self.assertEqual(len(s["tables"]["clients"]["rows"]), 1)
         self.assertEqual(s["tables"]["aps"]["rows"][0]["clients"], 2)
         self.assertEqual([c["ch"] for c in s["channels"]], [1, 36])
@@ -61,14 +74,14 @@ class StoreTest(unittest.TestCase):
         for i in range(rs.HISTORY_POINTS + 5):
             item = {**BLE["items"][0], "rssi": -90 + i}
             self.store.ingest({**BLE, "items": [item]}, at=1_000 + i)
-        row = self.store.state(60, at=2_000)["tables"]["ble"]["rows"][0]
+        row = self.store.state(at=2_000)["tables"]["ble"]["rows"][0]
         self.assertEqual(len(row["history"]), rs.HISTORY_POINTS)
         self.assertEqual(row["history"][-1]["rssi"], -90 + rs.HISTORY_POINTS + 4)
 
     def test_malformed_messages_are_ignored(self):
         self.assertFalse(self.store.ingest({"t": "bogus"}))
         self.store.ingest({"t": "wifi", "items": [{"ssid": "no bssid"}, "junk", {"bssid": 5}]}, at=1)
-        self.assertEqual(self.store.state(60, at=2)["tables"]["wifi"]["rows"], [])
+        self.assertEqual(self.store.state(at=2)["tables"]["wifi"]["rows"], [])
 
     def test_annotations_update_and_clear(self):
         self.store.annotate("aa:bb:cc:00:00:01", {"alias": "Router", "pinned": True})
@@ -104,7 +117,7 @@ class StoreTest(unittest.TestCase):
         rs.handle_line(self.store, status, b'{"t":"wifi","items":[{"bss\n', at=3)  # Truncated.
         self.assertEqual(status.snapshot()["banner"], "ESP32-C5 WiFi/BLE recon (2.4 + 5 GHz)")
         self.assertEqual(status.snapshot()["lastLineAt"], 3)
-        self.assertEqual(len(self.store.state(60, at=4)["tables"]["ble"]["rows"]), 1)
+        self.assertEqual(len(self.store.state(at=4)["tables"]["ble"]["rows"]), 1)
 
 
 class HttpTest(unittest.TestCase):
@@ -135,7 +148,7 @@ class HttpTest(unittest.TestCase):
 
     def test_state_and_page(self):
         self.store.ingest(WIFI)
-        code, body = self.request("GET", "/api/state?window=60")
+        code, body = self.request("GET", "/api/state?after=0")
         self.assertEqual(code, 200)
         state = json.loads(body)
         self.assertEqual(len(state["tables"]["wifi"]["rows"]), 2)
