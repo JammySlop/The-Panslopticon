@@ -1,15 +1,15 @@
-name: nano-esp32
+name: esp32-recon
 
 on:
   push:
     branches: ["**"]
-    paths: ["nano-esp32/**", ".github/workflows/nano-esp32.yml"]
+    paths: ["esp32-recon/**", ".github/workflows/esp32-recon.yml"]
   pull_request:
-    paths: ["nano-esp32/**", ".github/workflows/nano-esp32.yml"]
+    paths: ["esp32-recon/**", ".github/workflows/esp32-recon.yml"]
 
 defaults:
   run:
-    working-directory: nano-esp32
+    working-directory: esp32-recon
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('nano-esp32/platformio.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('esp32-recon/platformio.ini') }}
 
       - name: Install PlatformIO Core
         run: pip install --upgrade platformio

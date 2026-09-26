@@ -470,12 +470,27 @@ function actionButton(label, onClick) {
 
 const isNew = (entry, now) => now - entry.firstSeen < NEW_DEVICE_MS;
 
-// Given samples [{t, rssi}] oldest -> newest for one device, return a short
-// label describing whether the device is getting closer, moving away, or
-// holding steady (shown next to the signal bar to help physically locate it).
-// Return "" when there is not enough movement or data to say.
+const TREND_WINDOW_MS = 5 * 60_000;  // Only recent readings say where a device is now.
+const TREND_MIN_SAMPLES = 4;
+const TREND_MIN_DB = 6;              // Smaller swings are ordinary multipath noise.
+
+// Given samples [{t, rssi}] oldest -> newest for one device, returns "closer"
+// or "farther" when its signal has clearly moved over the last few minutes,
+// and "" when it is steady, the data is too thin, or the device has gone quiet.
 function signalTrend(samples) {
-  // TODO(human)
+  if (!samples.length) return "";
+  const newest = samples[samples.length - 1].t;
+  if (Date.now() - newest > TREND_WINDOW_MS) return "";
+  const recent = samples.filter((s) => newest - s.t <= TREND_WINDOW_MS);
+  if (recent.length < TREND_MIN_SAMPLES) return "";
+
+  // Compare the average of the oldest and newest few readings rather than two
+  // single readings, which can differ by several dB with nothing moving.
+  const k = Math.min(3, Math.floor(recent.length / 2));
+  const mean = (list) => list.reduce((sum, s) => sum + s.rssi, 0) / list.length;
+  const delta = mean(recent.slice(-k)) - mean(recent.slice(0, k));
+  if (delta >= TREND_MIN_DB) return "closer";
+  if (delta <= -TREND_MIN_DB) return "farther";
   return "";
 }
 
@@ -497,7 +512,7 @@ function signalNode(entry) {
 
   const trend = signalTrend(samples);
   if (trend) {
-    const rising = samples[samples.length - 1].rssi >= samples[0].rssi;
+    const rising = trend === "closer";
     const badge = document.createElement("span");
     badge.className = "trend " + (rising ? "up" : "down");
     badge.textContent = (rising ? "▲ " : "▼ ") + trend;

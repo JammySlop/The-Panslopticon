@@ -36,9 +36,18 @@ const char* authModeName(wifi_auth_mode_t mode) {
 // Marks networks whose security deserves attention in a survey. Returns a short
 // label for the FLAG column, or "" when there is nothing to note.
 const char* securityFlag(wifi_auth_mode_t mode) {
-    // TODO(human)
-    (void)mode;
-    return "";
+    switch (mode) {
+        case WIFI_AUTH_OPEN:           return "OPEN";      // No encryption at all.
+        case WIFI_AUTH_WEP:            return "WEP";       // Crackable in minutes.
+        case WIFI_AUTH_WPA_PSK:
+        case WIFI_AUTH_WPA_ENTERPRISE: return "WPA1";      // TKIP era, deprecated since 2012.
+        // Mixed mode keeps WPA1/TKIP enabled for old clients, so it inherits
+        // its weaknesses. OWE and WPA2/WPA3 transition mode are not flagged:
+        // OWE encrypts without a password by design, and transition mode is
+        // the normal WPA3 rollout path.
+        case WIFI_AUTH_WPA_WPA2_PSK:   return "WPA1-MIX";
+        default:                       return "";
+    }
 }
 
 namespace {

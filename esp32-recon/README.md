@@ -1,8 +1,9 @@
-# nano-esp32
+# esp32-recon
 
 PlatformIO project for a passive WiFi and Bluetooth LE survey tool. It alternates
 a WiFi sweep and a BLE sweep and sends what it finds over USB, where a local web
-page displays it. It never joins a network or connects to a device.
+page displays it. It is receive-only: it never joins a network, connects to a
+device, or transmits.
 
 Two boards are supported from the same source:
 
@@ -18,10 +19,14 @@ The C5 needs Arduino core 3.3+, so the project uses the community
 - **WiFi (scan):** SSID, BSSID, signal (RSSI), channel and band, security,
   cipher, WPS, PHY modes (a/b/g/n/ac/ax), advertised country, and BSSID vendor.
   Listen-only (passive) by default. On the C5 a sweep covers every 2.4 and
-  5 GHz channel, which takes about 17 s at the default dwell time.
+  5 GHz channel, which takes about 17 s at the default dwell time. The **Flag**
+  column marks weak security: `OPEN`, `WEP`, `WPA1`, and `WPA1-MIX` (WPA/WPA2
+  mixed mode, which keeps TKIP enabled).
 - **BLE:** address and type, signal, name, manufacturer, TX power, appearance,
   decoded product family (AirPods, Find My, iBeacon…), a rough distance
-  estimate, and advertised services.
+  estimate, and advertised services. Passive by default (`kBleActiveScan`), so
+  only names carried in advertisements show up; active scanning would transmit
+  scan requests.
 - **Monitor mode (Tier 2, receive-only):** hops channels 1/6/11 (plus the
   non-DFS 5 GHz channels 36-48 and 149-165 on the C5) in promiscuous mode and
   parses 802.11 *frame headers only* to report devices probing for
@@ -45,7 +50,7 @@ continues whether or not a browser is open.
 One-time setup (needs Python 3.10+):
 
 ```powershell
-cd nano-esp32   # from the repository root
+cd esp32-recon   # from the repository root
 python -m venv host\.venv
 host\.venv\Scripts\python.exe -m pip install -r host\requirements.txt
 ```
@@ -116,7 +121,9 @@ existing database entries are never overwritten.
   network names across every table at once.
 - **Signal sparkline** per device shows its last 40 RSSI readings from the
   database, so it survives page reloads and service restarts. A rising line
-  means you're getting closer, which helps physically locate a device.
+  means you're getting closer, which helps physically locate a device. A
+  ▲ closer / ▼ farther badge appears when the signal has moved by 6 dB or more
+  over the last five minutes.
 - **NEW** badge marks devices first seen in the last 20 s. The details panel
   shows the date a device was first ever recorded.
 - **Freeze** pauses updates so rows stop moving while you inspect.

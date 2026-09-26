@@ -34,9 +34,11 @@ constexpr bool kWifiPassiveScan = true;
 // (channel count x dwell).
 constexpr uint32_t kWifiDwellMsPerChannel = 360;
 
-// Active BLE scanning requests the scan response, which is where many devices
-// put their name. Passive scanning sees fewer names.
-constexpr bool kBleActiveScan = true;
+// Passive (false): only listen to advertisements; transmits nothing. Active
+// (true): send a scan request to each device to get its scan response, where
+// many devices put their name. Passive keeps the scanner receive-only at the
+// cost of fewer names.
+constexpr bool kBleActiveScan = false;
 constexpr uint32_t kBleScanSeconds = 5;
 
 constexpr uint32_t kPauseBetweenCyclesMs = 1000;
