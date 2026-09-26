@@ -41,8 +41,9 @@ Tuning (scan mode, dwell time, BLE window, output format) lives in
 
 ## Touch display (C5 only)
 
-The C5 build drives a 2.8" 240x320 SPI touch display (ILI9341 panel, XPT2046
-touch controller: the common 14-pin board) as a standalone dashboard. It works
+The C5 build drives a 240x320 SPI touch display (ILI9341 panel, XPT2046 touch
+controller: the common 14-pin 2.8" and 3.2" boards; tested with a Hosyond 3.2",
+LCDWIKI MSP3218) as a standalone dashboard. It works
 with or without the host service running. Four pages: **Summary**, **WiFi**
 (strongest networks, 5 GHz channels in blue, weak security in red),
 **Bluetooth LE** (best available name, signal, rough distance), and
@@ -61,7 +62,7 @@ Wiring to the ESP32-C5-DevKitC-1 (display pin -> DevKit header label):
 | SDI (MOSI) | 8   | Shared with T_DIN. |
 | SCK     | 10     | Shared with T_CLK. |
 | LED     | 1      | Backlight. If your board has no transistor on LED (it gets dim or the board resets), wire LED to 3V3 instead. |
-| SDO (MISO) | *not connected* | This panel doesn't release the line, which corrupts touch reads. The firmware never reads the panel. |
+| SDO (MISO) | *not connected* | Not needed: the firmware never reads the panel. On many of these boards it doesn't release the line, which would corrupt touch reads. |
 | T_CLK   | 10     | Same pin as SCK. |
 | T_CS    | 0      | |
 | T_DIN   | 8      | Same pin as SDI. |
@@ -75,6 +76,13 @@ To build without the display, remove `-DRECON_DISPLAY=1` from `platformio.ini`.
 The frame is drawn into a buffer in PSRAM and sent in one go, so pages don't
 flicker. Drawing and touch run in their own task, so taps respond during the
 17 s WiFi scan.
+
+The firmware holds the panel's CS low for a whole frame instead of letting the
+display library pulse it around every command. The tested board's CS line
+switches slowly enough that the start of each command was lost at normal SPI
+speeds, which leaves the screen white. If a board of this type stays white with
+the backlight on, check that CS handling (`PanelSelect` in `src/display.cpp`)
+before suspecting the wiring.
 
 ## Host service and web interface
 

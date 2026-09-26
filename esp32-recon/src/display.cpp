@@ -51,9 +51,32 @@ struct Snapshot {
 std::mutex mu;
 Snapshot latest;
 
-Adafruit_ILI9341 tft(config::kTftCs, config::kTftDc, config::kTftReset);
+// CS is not given to the library (-1): see PanelSelect.
+Adafruit_ILI9341 tft(-1, config::kTftDc, config::kTftReset);
 XPT2046_Touchscreen touch(config::kTouchCs, config::kTouchIrq);
 GFXcanvas16* canvas = nullptr;  // Full-frame buffer in PSRAM: no flicker.
+
+// Selects the panel for a whole batch of commands (init, or one frame).
+//
+// The library pulses CS around every command, and some panels (seen on a
+// Hosyond 3.2" MSP3218) have such a slow CS edge that the first bits after
+// each falling edge are lost: the panel never initialises and stays white. It
+// only worked at 100 kHz or with CS held low. So CS is held for the whole
+// batch, with settling time on both edges. The trailing wait also keeps a
+// slowly rising CS from catching the start of a touch-controller read.
+class PanelSelect {
+public:
+    static constexpr uint32_t kSettleUs = 20;
+    PanelSelect() {
+        digitalWrite(config::kTftCs, LOW);
+        delayMicroseconds(kSettleUs);
+    }
+    ~PanelSelect() {
+        delayMicroseconds(kSettleUs);
+        digitalWrite(config::kTftCs, HIGH);
+        delayMicroseconds(kSettleUs);
+    }
+};
 
 // --- text helpers ------------------------------------------------------------
 
@@ -261,6 +284,7 @@ void render(Page page) {
         case kMonitor: drawMonitor(c, s); break;
         default: break;
     }
+    PanelSelect select;
     tft.drawRGBBitmap(0, 0, c.getBuffer(), kW, kH);
 }
 
@@ -319,9 +343,14 @@ void begin() {
 
     // Both libraries use the global SPI object; start it on our pins first.
     SPI.begin(config::kSpiSck, config::kSpiMiso, config::kSpiMosi);
-    tft.begin(config::kTftSpiHz);
-    tft.setRotation(config::kTftRotation);
-    tft.fillScreen(kBg);
+    pinMode(config::kTftCs, OUTPUT);
+    digitalWrite(config::kTftCs, HIGH);
+    {
+        PanelSelect select;
+        tft.begin(config::kTftSpiHz);
+        tft.setRotation(config::kTftRotation);
+        tft.fillScreen(kBg);
+    }
     touch.begin();
     touch.setRotation(config::kTftRotation);
     // T_IRQ only ever pulls low, and not every display board has a pull-up on
