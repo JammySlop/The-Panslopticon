@@ -1,0 +1,10 @@
+{
+  "name": "FileShare",
+  "version": "0.1.0",
+  "description": "Small-file HTTP share for ESP32 over any Arduino FS, plus optional WiFi join with a setup hotspot.",
+  "keywords": ["wifi", "file", "share", "webserver", "littlefs", "sd"],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": { "flags": "-std=gnu++17" }
+}
