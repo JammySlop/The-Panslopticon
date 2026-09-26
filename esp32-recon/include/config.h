@@ -89,7 +89,9 @@ constexpr int8_t kTftBacklight = 1;  // TFT LED
 constexpr int8_t kTouchCs = 0;
 constexpr int8_t kTouchIrq = 24;
 
-constexpr uint32_t kTftSpiHz = 40000000;
+// 10 MHz is dependable over breadboard jumpers; 40 MHz is only safe on short,
+// soldered leads. A full-screen redraw takes ~125 ms at 10 MHz.
+constexpr uint32_t kTftSpiHz = 10000000;
 constexpr uint8_t kTftRotation = 1;       // Landscape, 320x240, pins on the left.
 constexpr uint32_t kTouchPollMs = 30;
 #endif
