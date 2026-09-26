@@ -73,15 +73,20 @@ constexpr size_t kMaxProbesPerClient = 6;
 // likely attack. Normal roaming produces only a few.
 constexpr uint32_t kDeauthAlertThreshold = 8;
 
-// --- Touch display (ESP32-C5 build only) -----------------------------------
-// 2.8" 240x320 SPI TFT: ILI9341 panel + XPT2046 touch controller. Compiled in
-// when platformio.ini defines RECON_DISPLAY. Wiring is in the README.
-#if RECON_DISPLAY
-// Display and touch share one SPI bus (the C5's default SPI pins).
-constexpr int8_t kSpiSck = 10;   // TFT SCK   + T_CLK
-constexpr int8_t kSpiMosi = 8;   // TFT SDI   + T_DIN
-constexpr int8_t kSpiMiso = 9;   // T_DO only. Leave the TFT's SDO unconnected:
+// --- Shared SPI bus (ESP32-C5 build only) ----------------------------------
+// The display, touch controller and SD card all hang off the C5's default SPI
+// pins, each with its own chip-select. Defined when any of them is compiled in.
+#if RECON_DISPLAY || RECON_SD
+constexpr int8_t kSpiSck = 10;   // TFT SCK / T_CLK / SD SCK
+constexpr int8_t kSpiMosi = 8;   // TFT SDI / T_DIN / SD MOSI
+constexpr int8_t kSpiMiso = 9;   // T_DO / SD MISO. Leave the TFT's SDO unconnected:
                                  // it doesn't release the line and corrupts touch reads.
+#endif
+
+// --- Touch display (ESP32-C5 build only) -----------------------------------
+// 2.8"/3.2" 240x320 SPI TFT: ILI9341 panel + XPT2046 touch controller. Compiled
+// in when platformio.ini defines RECON_DISPLAY. Wiring is in the README.
+#if RECON_DISPLAY
 constexpr int8_t kTftCs = 6;
 constexpr int8_t kTftDc = 5;
 constexpr int8_t kTftReset = 4;
@@ -94,6 +99,35 @@ constexpr int8_t kTouchIrq = 24;
 constexpr uint32_t kTftSpiHz = 10000000;
 constexpr uint8_t kTftRotation = 1;       // Landscape, 320x240, pins on the left.
 constexpr uint32_t kTouchPollMs = 30;
+#endif
+
+// --- SD card storage (ESP32-C5 build only) ---------------------------------
+// 6-pin SPI microSD reader on the shared bus. Compiled in when platformio.ini
+// defines RECON_SD. Every sweep's JSON line is appended to a per-boot file so
+// the scanner keeps a local record with no computer attached.
+#if RECON_SD
+constexpr int8_t kSdCs = 23;              // The last free non-strapping pin (J3).
+constexpr uint32_t kSdSpiHz = 10000000;   // Conservative for the shared bus.
+constexpr char kSdDir[] = "/recon";       // Session files: /recon/scanNNNN.jsonl.
+// Keeping the file open and flushing periodically is far faster than reopening
+// per line. A power cut loses at most this much unflushed data.
+constexpr uint32_t kSdFlushMs = 5000;
+#endif
+
+// --- WiFi export hotspot (ESP32-C5 build only) -----------------------------
+// The ONE exception to receive-only: when an export is explicitly triggered the
+// board runs its own password-protected access point, serves the SD files, then
+// shuts the radio off and resumes passive scanning. It never joins a network
+// and never transmits at any other time. Compiled in with RECON_WIFI_EXPORT
+// (which needs RECON_SD).
+#if RECON_WIFI_EXPORT
+constexpr char kExportApPrefix[] = "recon-export-";  // Suffixed with a random tag.
+constexpr uint8_t kExportApChannel = 6;
+constexpr uint8_t kExportPassLen = 12;               // Random WPA2 password length.
+// Tear the hotspot down after this long with no client connected, and after the
+// hard cap no matter what, so the radio is never left transmitting.
+constexpr uint32_t kExportIdleTimeoutMs = 120000;
+constexpr uint32_t kExportMaxMs = 900000;
 #endif
 
 }  // namespace config

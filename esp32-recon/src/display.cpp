@@ -11,6 +11,7 @@
 #include <esp_memory_utils.h>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 
 #include "config.h"
@@ -50,6 +51,9 @@ struct Snapshot {
 
 std::mutex mu;
 Snapshot latest;
+
+// Set true while an export owns the SPI bus; the task then leaves it alone.
+std::atomic<bool> paused{false};
 
 // CS is not given to the library (-1): see PanelSelect.
 Adafruit_ILI9341 tft(-1, config::kTftDc, config::kTftReset);
@@ -299,6 +303,11 @@ void task(void*) {
     uint32_t releasedAt = 0;
 
     for (;;) {
+        // While paused, touch nothing on the bus: an export is using it.
+        if (paused.load(std::memory_order_acquire)) {
+            vTaskDelay(pdMS_TO_TICKS(config::kTouchPollMs));
+            continue;
+        }
         // One page per tap: advance on press, and re-arm only after the panel
         // has been released for a moment, since a press can flicker.
         const bool down = touch.touched();
@@ -360,6 +369,15 @@ void begin() {
 
     xTaskCreate(task, "display", 8192, nullptr, 1, nullptr);
 }
+
+void pause() {
+    paused.store(true, std::memory_order_release);
+    // Wait past one poll interval plus a full redraw so any in-flight transfer
+    // on the bus has finished before the caller starts using it.
+    delay(config::kTouchPollMs + 200);
+}
+
+void resume() { paused.store(false, std::memory_order_release); }
 
 void wifi(uint32_t cycle, const std::vector<WifiNetwork>& networks) {
     std::lock_guard<std::mutex> lock(mu);

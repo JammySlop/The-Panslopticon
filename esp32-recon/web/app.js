@@ -641,6 +641,50 @@ function downloadSnapshot() {
   URL.revokeObjectURL(url);
 }
 
+// --- SD-card export (the board must have an SD card and the C5 build) ------
+
+async function postExport(path) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
+
+async function pullSdOverUsb() {
+  const button = $("sd-usb");
+  button.disabled = true;
+  setStatus("Copying the SD-card log over USB… (can take up to a scan cycle to start)", true);
+  try {
+    const { saved, dir } = await postExport("/api/export/usb");
+    const bytes = saved.reduce((sum, f) => sum + f.bytes, 0);
+    alert(saved.length
+      ? `Copied ${saved.length} file(s), ${bytes} bytes, to\n${dir}`
+      : "The board's SD card has no log files (or no card is fitted).");
+  } catch (err) {
+    alert(`SD copy failed: ${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function startWifiExport() {
+  if (!confirm("Start the WiFi export hotspot?\n\nThe board will transmit its own password-protected access point and pause scanning until the export ends (2 minutes idle, 15 minutes at most).")) return;
+  const button = $("sd-wifi");
+  button.disabled = true;
+  try {
+    const { ssid, pass, url } = await postExport("/api/export/wifi");
+    alert(`Hotspot up.\n\nNetwork: ${ssid}\nPassword: ${pass}\nThen open: ${url}\n\nIt shuts off by itself when you're done.`);
+  } catch (err) {
+    alert(`WiFi export failed: ${err.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // ---------------------------------------------------------------- utils ----
 
 function shortUuid(uuid) {
@@ -679,6 +723,8 @@ $("show-hidden").addEventListener("change", (e) => {
   render();
 });
 $("export").addEventListener("click", downloadSnapshot);
+$("sd-usb").addEventListener("click", pullSdOverUsb);
+$("sd-wifi").addEventListener("click", startWifiExport);
 
 // Test/automation hook: drive investigation state without the DOM prompts.
 window.recon = {

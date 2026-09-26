@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import socket
 import sqlite3
 import threading
@@ -38,6 +39,7 @@ log = logging.getLogger("recon")
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
 DEFAULT_DB = ROOT / "data" / "recon.db"
+SDCARD_DIR = ROOT / "data" / "sdcard"  # Where USB export drops the pulled files.
 
 # USB IDs of the supported boards.
 BOARD_USB_IDS = {
@@ -435,6 +437,109 @@ def find_board_port() -> str | None:
     return None
 
 
+class SerialLink:
+    """Shared handle on the open serial port. The reader loop holds the lock for
+    each read; an export borrows it for a whole command/response exchange, so the
+    two never touch the port at once."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.ser = None  # Set by serial_loop while the port is open.
+
+    @contextmanager
+    def transaction(self, timeout: float = 20):
+        if not self.lock.acquire(timeout=timeout):
+            raise TimeoutError("serial port busy")
+        try:
+            if self.ser is None:
+                raise RuntimeError("board not connected")
+            yield self.ser
+        finally:
+            self.lock.release()
+
+
+def _read_line(ser, deadline: float) -> str:
+    """Reads one newline-terminated line before `deadline`. Raises on timeout."""
+    buf = bytearray()
+    while time.time() < deadline:
+        b = ser.read(1)
+        if not b:
+            continue
+        if b == b"\n":
+            return buf.decode("utf-8", "replace").rstrip("\r")
+        buf += b
+        if len(buf) > MAX_LINE_BYTES:
+            buf.clear()
+    raise TimeoutError("no line from board")
+
+
+# The board interleaves live scan output with a command reply only up to the
+# point it reads the command (it can be mid-scan, ~30 s). So every reader skips
+# lines until its marker, and the whole-cycle wait sets the timeouts.
+CMD_TIMEOUT_S = 45
+
+
+def usb_list(ser) -> list[dict]:
+    """Runs !ls and returns [{name, size}] for the SD log files."""
+    ser.reset_input_buffer()
+    ser.write(b"!ls\n")
+    ser.flush()
+    deadline = time.time() + CMD_TIMEOUT_S
+    files, started = [], False
+    while True:
+        line = _read_line(ser, deadline)
+        if line == "!ls-begin":
+            started = True
+        elif line == "!ls-end":
+            return files
+        elif started and line.startswith("F "):
+            parts = line.split(" ")
+            if len(parts) == 3 and parts[2].isdigit():
+                files.append({"name": parts[1], "size": int(parts[2])})
+
+
+def usb_cat(ser, name: str) -> bytes | None:
+    """Runs !cat and returns the file's bytes, or None if the board reports an
+    error. Live scan lines before the marker are skipped; the framed body is
+    contiguous because the board streams it in one uninterrupted call."""
+    ser.write(f"!cat {name}\n".encode())
+    ser.flush()
+    deadline = time.time() + CMD_TIMEOUT_S
+    capturing, lines = False, []
+    while True:
+        line = _read_line(ser, deadline)
+        if line.startswith("!cat-error"):
+            return None
+        if line.startswith("!cat-begin"):
+            capturing, lines = True, []
+        elif line.startswith("!cat-end"):
+            # The board writes the file then "\n!cat-end", so a file ending in a
+            # newline (they all do) leaves one blank capture line: drop it.
+            if lines and lines[-1] == "":
+                lines.pop()
+            return ("\n".join(lines) + "\n").encode("utf-8", "replace")
+        elif capturing:
+            lines.append(line)
+
+
+def wifi_trigger(ser) -> dict:
+    """Runs !wifi-export and returns the hotspot credentials the board prints.
+    The board then serves the export and is unreachable until it finishes, so
+    this returns as soon as the credentials arrive."""
+    ser.reset_input_buffer()
+    ser.write(b"!wifi-export\n")
+    ser.flush()
+    deadline = time.time() + CMD_TIMEOUT_S
+    while True:
+        line = _read_line(ser, deadline)
+        if line.startswith("!export-error"):
+            return {"error": line.split(" ", 1)[-1]}
+        if line.startswith("!export-unsupported"):
+            return {"error": "this build has no WiFi export"}
+        if line.startswith("!export-begin"):
+            return {k: v for k, _, v in (t.partition("=") for t in line.split()[1:]) if k}
+
+
 def handle_line(store: Store, status: SerialStatus, raw: bytes, at: int | None = None) -> None:
     at = now_ms() if at is None else at
     text = raw.decode("utf-8", "replace").strip()
@@ -450,8 +555,8 @@ def handle_line(store: Store, status: SerialStatus, raw: bytes, at: int | None =
         status.update(banner=text.strip("= "))
 
 
-def serial_loop(store: Store, status: SerialStatus, port_arg: str | None,
-                stop: threading.Event) -> None:
+def serial_loop(store: Store, status: SerialStatus, link: SerialLink,
+                port_arg: str | None, stop: threading.Event) -> None:
     """Finds the board, reads lines until it disappears, and repeats."""
     while not stop.is_set():
         port = port_arg or find_board_port()
@@ -462,13 +567,17 @@ def serial_loop(store: Store, status: SerialStatus, port_arg: str | None,
         try:
             # Opening asserts DTR/RTS (pyserial's default). The Nano's USB CDC
             # only sends once DTR is set; on the C5 DevKit the pair leaves the
-            # chip running.
-            with serial.Serial(port, BAUD_RATE, timeout=1) as ser:
+            # chip running. A short timeout keeps the per-read lock brief, so an
+            # export can grab the port between reads.
+            with serial.Serial(port, BAUD_RATE, timeout=0.3) as ser:
                 log.info("Reading from %s", port)
                 status.update(connected=True, port=port, since=now_ms(), error="")
+                with link.lock:
+                    link.ser = ser
                 pending = b""
                 while not stop.is_set():
-                    chunk = ser.readline()  # May return a partial line on timeout.
+                    with link.lock:
+                        chunk = ser.readline()  # May return a partial line on timeout.
                     if not chunk:
                         continue
                     pending += chunk
@@ -485,6 +594,36 @@ def serial_loop(store: Store, status: SerialStatus, port_arg: str | None,
             log.warning("Serial %s: %s", port, err)
             status.update(connected=False, error=str(err))
             stop.wait(RETRY_S)
+        finally:
+            with link.lock:
+                link.ser = None
+
+
+def export_usb(link: SerialLink, dest: Path) -> dict:
+    """Pulls every SD log file off the board over serial into `dest`. Returns a
+    summary of the files saved."""
+    dest.mkdir(parents=True, exist_ok=True)
+    saved = []
+    with link.transaction() as ser:
+        for entry in usb_list(ser):
+            if not _safe_name(entry["name"]):
+                continue
+            content = usb_cat(ser, entry["name"])
+            if content is None:
+                continue
+            (dest / entry["name"]).write_bytes(content)
+            saved.append({"name": entry["name"], "bytes": len(content)})
+    return {"saved": saved, "dir": str(dest)}
+
+
+def wifi_trigger_via(link: SerialLink) -> dict:
+    """Tells the board to bring up its export hotspot and returns the credentials."""
+    with link.transaction() as ser:
+        return wifi_trigger(ser)
+
+
+def _safe_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name)) and ".." not in name
 
 
 # --- HTTP ---------------------------------------------------------------------
@@ -493,7 +632,7 @@ def serial_loop(store: Store, status: SerialStatus, port_arg: str | None,
 class ReconServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, store: Store, status: SerialStatus):
+    def __init__(self, address, store: Store, status: SerialStatus, link: SerialLink):
         # "localhost" resolves to ::1 before 127.0.0.1 on Windows, and a client
         # that finds nothing on ::1 waits ~2 s before falling back, so main()
         # runs one server per loopback address.
@@ -502,6 +641,7 @@ class ReconServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.store = store
         self.status = status
+        self.link = link
         port = self.server_address[1]
         # Rejecting other Host headers stops DNS-rebinding pages from reading
         # the API through the browser.
@@ -564,16 +704,30 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self._host_ok():
             return
-        if urlsplit(self.path).path != "/api/annotations/import":
-            return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        path = urlsplit(self.path).path
+        # Every POST requires a JSON content type. That forces a CORS preflight,
+        # which this server never approves, so another site can't drive these
+        # actions (which pull data off the board or open a hotspot).
         body = self._read_json()
         if body is None:
             return
+        if path == "/api/annotations/import":
+            try:
+                changed = self.server.store.import_legacy(body)
+            except ValueError as err:
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
+            return self._json(HTTPStatus.OK, {"imported": changed})
+        if path == "/api/export/usb":
+            return self._export(lambda link: export_usb(link, SDCARD_DIR))
+        if path == "/api/export/wifi":
+            return self._export(lambda link: wifi_trigger_via(link))
+        self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _export(self, action) -> None:
         try:
-            changed = self.server.store.import_legacy(body)
-        except ValueError as err:
-            return self._json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
-        self._json(HTTPStatus.OK, {"imported": changed})
+            self._json(HTTPStatus.OK, action(self.server.link))
+        except (TimeoutError, RuntimeError) as err:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})
 
     # --- helpers ---
 
@@ -625,14 +779,15 @@ def main(argv=None) -> None:
 
     store = Store(args.db)
     status = SerialStatus()
+    link = SerialLink()
     stop = threading.Event()
-    reader = threading.Thread(target=serial_loop, args=(store, status, args.port, stop),
+    reader = threading.Thread(target=serial_loop, args=(store, status, link, args.port, stop),
                               name="serial", daemon=True)
     reader.start()
 
-    servers = [ReconServer(("127.0.0.1", args.http_port), store, status)]
+    servers = [ReconServer(("127.0.0.1", args.http_port), store, status, link)]
     try:
-        servers.append(ReconServer(("::1", args.http_port), store, status))
+        servers.append(ReconServer(("::1", args.http_port), store, status, link))
     except OSError as err:  # IPv6 disabled: IPv4 alone still works, just slower via "localhost".
         log.warning("Not listening on [::1]: %s", err)
     for extra in servers[1:]:

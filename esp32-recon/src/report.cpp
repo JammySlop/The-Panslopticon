@@ -3,10 +3,18 @@
 #include <Arduino.h>
 
 #include "config.h"
+#include "storage.h"
 #include "wifi_recon.h"
 
 namespace report {
 namespace {
+
+// Sends one finished JSON line to the host over USB and, on builds with an SD
+// card, appends it to the local log.
+void emit(const String& line) {
+    Serial.println(line);
+    storage::append(line);
+}
 
 // Emits `,"key":` before a value, or `"key":` for the first field in an object.
 // Callers pass first=true once, then false, so objects stay comma-correct as
@@ -104,7 +112,7 @@ void printWifiJson(uint32_t cycle, const std::vector<WifiNetwork>& networks) {
         out += '}';
     }
     out += "]}";
-    Serial.println(out);
+    emit(out);
 }
 
 void printBleJson(uint32_t cycle, const std::vector<BleDevice>& devices) {
@@ -137,7 +145,7 @@ void printBleJson(uint32_t cycle, const std::vector<BleDevice>& devices) {
         out += '}';
     }
     out += "]}";
-    Serial.println(out);
+    emit(out);
 }
 
 void printMonitorJson(uint32_t cycle, const MonitorReport& mon) {
@@ -201,7 +209,7 @@ void printMonitorJson(uint32_t cycle, const MonitorReport& mon) {
         out += '}';
     }
     out += "]}";
-    Serial.println(out);
+    emit(out);
 }
 
 void printMonitorTable(const MonitorReport& mon) {

@@ -5,6 +5,8 @@
 #include "display.h"
 #include "monitor.h"
 #include "report.h"
+#include "storage.h"
+#include "wifi_export.h"
 #include "wifi_recon.h"
 
 namespace {
@@ -18,6 +20,37 @@ void waitForSerial() {
     }
 }
 
+// Host-issued control commands, all prefixed with '!'. Everything else on the
+// serial line is ignored: the scanner never needs input to do its job.
+void runCommand(const String& cmd) {
+    if (cmd == "!ls") {
+        storage::list(Serial);
+    } else if (cmd.startsWith("!cat ")) {
+        storage::cat(Serial, cmd.substring(5));
+    } else if (cmd == "!sd-status") {
+        storage::status(Serial);
+    } else if (cmd == "!wifi-export") {
+        wifi_export::run(Serial);
+    } else {
+        Serial.printf("!unknown %s\n", cmd.c_str());
+    }
+}
+
+// Reads any pending serial input a line at a time without blocking the scan.
+void pollCommands() {
+    static String line;
+    while (Serial.available()) {
+        const char c = static_cast<char>(Serial.read());
+        if (c == '\n' || c == '\r') {
+            line.trim();
+            if (line.startsWith("!")) runCommand(line);
+            line = "";
+        } else if (line.length() < 128) {
+            line += c;
+        }
+    }
+}
+
 }  // namespace
 
 void setup() {
@@ -28,6 +61,9 @@ void setup() {
     Serial.printf("\n=== %s WiFi/BLE recon (%s) ===\n", ESP.getChipModel(),
                   config::kDualBand ? "2.4 + 5 GHz" : "2.4 GHz");
     Serial.printf("PSRAM: %lu KB\n", static_cast<unsigned long>(ESP.getPsramSize() / 1024));
+    // Mount the SD card before the display starts its task, so the SD init has
+    // the shared SPI bus to itself.
+    storage::begin();
     wifi_recon::begin();
     ble_recon::begin();
     monitor::begin();
@@ -35,6 +71,7 @@ void setup() {
 }
 
 void loop() {
+    pollCommands();
     ++cycle;
     report::cycleStart(cycle);
 

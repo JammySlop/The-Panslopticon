@@ -3,7 +3,8 @@
 PlatformIO project for a passive WiFi and Bluetooth LE survey tool. It alternates
 a WiFi sweep and a BLE sweep and sends what it finds over USB, where a local web
 page displays it. It is receive-only: it never joins a network, connects to a
-device, or transmits.
+device, or transmits, except for the on-demand WiFi export hotspot described
+below, which is only on while you're exporting.
 
 Two boards are supported from the same source:
 
@@ -83,6 +84,42 @@ switches slowly enough that the start of each command was lost at normal SPI
 speeds, which leaves the screen white. If a board of this type stays white with
 the backlight on, check that CS handling (`PanelSelect` in `src/display.cpp`)
 before suspecting the wiring.
+
+## SD card log and export (C5 only)
+
+A 6-pin SPI microSD reader keeps a local record, so the scanner can run with no
+computer attached. Every sweep's JSON line (the same data sent over USB) is
+appended to `/recon/scanNNNN.jsonl` on the card, with one file per boot. The
+file is flushed every 5 seconds, so a power cut loses at most that much.
+
+| SD reader | DevKit | Notes |
+|-----------|--------|-------|
+| 3.3V      | 3V3    | Not 5V: the reader has no regulator. |
+| GND       | G      | |
+| SCK       | 10     | Shared with the display and touch. |
+| MOSI      | 8      | Shared with the display and touch. |
+| MISO      | 9      | Shared with T_DO. |
+| CS        | 23     | The last free non-strapping pin (J3). |
+
+Format the card as FAT32. The board scans normally with no card fitted.
+
+Getting the data off:
+
+- **Pull SD log** (web page toolbar): copies every log file from the card to
+  `data/sdcard/` on this computer over USB. It starts once the board finishes
+  its current sweep, so allow up to about 30 seconds.
+- **WiFi export** (web page toolbar): the board starts its own
+  password-protected access point with a random name and password, shown on the
+  page. Join it from a phone or laptop and open the address shown to download
+  the files. **This is the only time the scanner transmits.** Scanning pauses
+  while the hotspot is up, and it shuts itself off after 2 minutes with nobody
+  connected, or after 15 minutes regardless. It never joins another network.
+  Build without `-DRECON_WIFI_EXPORT=1` to keep the scanner strictly
+  receive-only.
+- Or take the card out and read it on a computer.
+
+The board also answers these serial commands, which the host service uses:
+`!ls`, `!cat <file>`, `!sd-status`, `!wifi-export`.
 
 ## Host service and web interface
 

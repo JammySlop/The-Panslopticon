@@ -125,7 +125,7 @@ class HttpTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = rs.Store(Path(self.tmp.name) / "t.db")
-        self.server = rs.ReconServer(("127.0.0.1", 0), self.store, rs.SerialStatus())
+        self.server = rs.ReconServer(("127.0.0.1", 0), self.store, rs.SerialStatus(), rs.SerialLink())
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -175,6 +175,83 @@ class HttpTest(unittest.TestCase):
     def test_import_endpoint(self):
         code, body = self.request("POST", "/api/annotations/import", {"alias": {"aa": "A"}})
         self.assertEqual((code, json.loads(body)), (200, {"imported": 1}))
+
+    def test_export_without_a_board_is_unavailable(self):
+        code, body = self.request("POST", "/api/export/usb", {})
+        self.assertEqual(code, 503)
+        self.assertIn("not connected", json.loads(body)["error"])
+
+
+class FakeSerial:
+    """Stands in for the board: emits one live scan line before each framed reply
+    so the protocol readers are tested against realistic interleaving."""
+
+    def __init__(self, files):
+        self.files = files
+        self.buf = bytearray()
+
+    def reset_input_buffer(self):
+        self.buf.clear()
+
+    def flush(self):
+        pass
+
+    def write(self, data):
+        cmd = data.decode().strip()
+        out = b'{"t":"wifi","cycle":9,"up":9,"items":[]}\n'  # live line to skip
+        if cmd == "!ls":
+            out += b"!ls-begin\n"
+            for name, content in self.files.items():
+                out += f"F {name} {len(content)}\n".encode()
+            out += b"!ls-end\n"
+        elif cmd.startswith("!cat "):
+            name = cmd[5:]
+            if name in self.files:
+                c = self.files[name]
+                out += f"!cat-begin {name} {len(c)}\n".encode() + c + f"\n!cat-end {name}\n".encode()
+            else:
+                out += f"!cat-error {name}\n".encode()
+        elif cmd == "!wifi-export":
+            out += b"!export-begin ssid=recon-export-ab12 pass=abcd2345wxyz url=http://192.168.4.1/\n"
+        self.buf += out
+        return len(data)
+
+    def read(self, n=1):
+        if not self.buf:
+            return b""
+        chunk = bytes(self.buf[:n])
+        del self.buf[:n]
+        return chunk
+
+
+class ExportProtocolTest(unittest.TestCase):
+    FILES = {"scan0001.jsonl": b'{"t":"boot"}\n{"t":"wifi","items":[]}\n',
+             "scan0002.jsonl": b'{"t":"boot"}\n'}
+
+    def test_list_skips_live_lines(self):
+        got = rs.usb_list(FakeSerial(self.FILES))
+        self.assertEqual(got, [{"name": "scan0001.jsonl", "size": 37},
+                               {"name": "scan0002.jsonl", "size": 13}])
+
+    def test_cat_reconstructs_file_bytes(self):
+        ser = FakeSerial(self.FILES)
+        self.assertEqual(rs.usb_cat(ser, "scan0001.jsonl"), self.FILES["scan0001.jsonl"])
+        self.assertIsNone(rs.usb_cat(ser, "missing.jsonl"))
+
+    def test_export_usb_saves_every_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = rs.SerialLink()
+            link.ser = FakeSerial(self.FILES)
+            summary = rs.export_usb(link, Path(tmp))
+            self.assertEqual({f["name"] for f in summary["saved"]}, set(self.FILES))
+            for name, content in self.FILES.items():
+                self.assertEqual((Path(tmp) / name).read_bytes(), content)
+
+    def test_wifi_trigger_parses_credentials(self):
+        creds = rs.wifi_trigger(FakeSerial(self.FILES))
+        self.assertEqual(creds["ssid"], "recon-export-ab12")
+        self.assertEqual(creds["pass"], "abcd2345wxyz")
+        self.assertEqual(creds["url"], "http://192.168.4.1/")
 
 
 if __name__ == "__main__":
