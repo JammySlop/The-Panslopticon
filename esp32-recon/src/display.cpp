@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <XPT2046_Touchscreen.h>
+#include <driver/gpio.h>
 #include <esp_memory_utils.h>
 
 #include <algorithm>
@@ -323,6 +324,10 @@ void begin() {
     tft.fillScreen(kBg);
     touch.begin();
     touch.setRotation(config::kTftRotation);
+    // T_IRQ only ever pulls low, and not every display board has a pull-up on
+    // it. Enable the internal one without pinMode(), which would drop the
+    // interrupt the library just attached.
+    gpio_pullup_en(static_cast<gpio_num_t>(config::kTouchIrq));
 
     xTaskCreate(task, "display", 8192, nullptr, 1, nullptr);
 }
