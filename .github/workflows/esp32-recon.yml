@@ -1,0 +1,39 @@
+name: esp32-recon
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["esp32-recon/**", ".github/workflows/esp32-recon.yml"]
+  pull_request:
+    paths: ["esp32-recon/**", ".github/workflows/esp32-recon.yml"]
+
+defaults:
+  run:
+    working-directory: esp32-recon
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('esp32-recon/platformio.ini') }}
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build firmware (all boards)
+        run: pio run -e esp32c5 -e nano_esp32
+
+      - name: Host service tests
+        run: |
+          pip install -r host/requirements.txt
+          python -m unittest discover -s host -v

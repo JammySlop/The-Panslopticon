@@ -1,0 +1,15 @@
+.pio/
+.vscode/
+!.vscode/extensions.json
+*.bin
+*.elf
+*.map
+CMakeListsPrivate.txt
+
+# Host service: local venv and the survey database (never commit captured data)
+host/.venv/
+__pycache__/
+data/
+*.db
+*.db-wal
+*.db-shm
