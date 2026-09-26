@@ -287,7 +287,9 @@ class Store:
                     entry["firstSeen"] = r["first_seen"]
                     entry["lastSeen"] = r["last_seen"]
                     entry["lastSweep"] = r["last_sweep"]
-                    entry["history"] = self._history(db, table, r["addr"])
+                    # AP-traffic records carry no RSSI. Looking for history
+                    # would scan all of their sightings and find nothing.
+                    entry["history"] = self._history(db, table, r["addr"]) if "rssi" in entry else []
                     rows.append(entry)
                 tables[table] = {"latestSweep": sweep["id"] if sweep else 0, "rows": rows}
 

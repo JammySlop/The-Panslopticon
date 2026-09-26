@@ -39,6 +39,43 @@ The C5 needs Arduino core 3.3+, so the project uses the community
 Tuning (scan mode, dwell time, BLE window, output format) lives in
 `include/config.h`.
 
+## Touch display (C5 only)
+
+The C5 build drives a 2.8" 240x320 SPI touch display (ILI9341 panel, XPT2046
+touch controller: the common 14-pin board) as a standalone dashboard. It works
+with or without the host service running. Four pages: **Summary**, **WiFi**
+(strongest networks, 5 GHz channels in blue, weak security in red),
+**Bluetooth LE** (best available name, signal, rough distance), and
+**Monitor** (packets per channel, deauth alerts, probing clients). Tap
+anywhere for the next page.
+
+Wiring to the ESP32-C5-DevKitC-1 (display pin -> DevKit header label):
+
+| Display | DevKit | Notes |
+|---------|--------|-------|
+| VCC     | 5V     | The display board has its own 3.3 V regulator. 3V3 also works on most boards. |
+| GND     | G      | |
+| CS      | 6      | |
+| RESET   | 4      | |
+| DC      | 5      | |
+| SDI (MOSI) | 8   | Shared with T_DIN. |
+| SCK     | 10     | Shared with T_CLK. |
+| LED     | 1      | Backlight. If your board has no transistor on LED (it gets dim or the board resets), wire LED to 3V3 instead. |
+| SDO (MISO) | *not connected* | This panel doesn't release the line, which corrupts touch reads. The firmware never reads the panel. |
+| T_CLK   | 10     | Same pin as SCK. |
+| T_CS    | 0      | |
+| T_DIN   | 8      | Same pin as SDI. |
+| T_DO    | 9      | |
+| T_IRQ   | 24     | |
+
+These avoid the C5's strapping pins (2, 3, 7, 25-28), the console UART (11,
+12), USB (13, 14), and the RGB LED (27). Pins are set in `include/config.h`.
+To build without the display, remove `-DRECON_DISPLAY=1` from `platformio.ini`.
+
+The frame is drawn into a buffer in PSRAM and sent in one go, so pages don't
+flicker. Drawing and touch run in their own task, so taps respond during the
+17 s WiFi scan.
+
 ## Host service and web interface
 
 `host/recon_service.py` runs on the computer the board is plugged into. It

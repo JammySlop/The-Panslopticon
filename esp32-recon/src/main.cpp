@@ -2,6 +2,7 @@
 
 #include "ble_recon.h"
 #include "config.h"
+#include "display.h"
 #include "monitor.h"
 #include "report.h"
 #include "wifi_recon.h"
@@ -30,6 +31,7 @@ void setup() {
     wifi_recon::begin();
     ble_recon::begin();
     monitor::begin();
+    display::begin();
 }
 
 void loop() {
@@ -39,10 +41,20 @@ void loop() {
     // WiFi and BLE share one radio, so run them back to back, not together.
     // The LED stays lit while a sweep is in progress.
     digitalWrite(LED_BUILTIN, HIGH);
-    report::wifi(cycle, wifi_recon::scan());
-    report::ble(cycle, ble_recon::scan());
+    const auto networks = wifi_recon::scan();
+    report::wifi(cycle, networks);
+    display::wifi(cycle, networks);
+
+    const auto devices = ble_recon::scan();
+    report::ble(cycle, devices);
+    display::ble(cycle, devices);
+
     // Monitor mode reconfigures the radio, so it runs last, after the scans.
-    if (config::kMonitorEnabled) report::monitorReport(cycle, monitor::sweep());
+    if (config::kMonitorEnabled) {
+        const MonitorReport mon = monitor::sweep();
+        report::monitorReport(cycle, mon);
+        display::monitor(cycle, mon);
+    }
     digitalWrite(LED_BUILTIN, LOW);
 
     delay(config::kPauseBetweenCyclesMs);

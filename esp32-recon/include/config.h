@@ -73,4 +73,25 @@ constexpr size_t kMaxProbesPerClient = 6;
 // likely attack. Normal roaming produces only a few.
 constexpr uint32_t kDeauthAlertThreshold = 8;
 
+// --- Touch display (ESP32-C5 build only) -----------------------------------
+// 2.8" 240x320 SPI TFT: ILI9341 panel + XPT2046 touch controller. Compiled in
+// when platformio.ini defines RECON_DISPLAY. Wiring is in the README.
+#if RECON_DISPLAY
+// Display and touch share one SPI bus (the C5's default SPI pins).
+constexpr int8_t kSpiSck = 10;   // TFT SCK   + T_CLK
+constexpr int8_t kSpiMosi = 8;   // TFT SDI   + T_DIN
+constexpr int8_t kSpiMiso = 9;   // T_DO only. Leave the TFT's SDO unconnected:
+                                 // it doesn't release the line and corrupts touch reads.
+constexpr int8_t kTftCs = 6;
+constexpr int8_t kTftDc = 5;
+constexpr int8_t kTftReset = 4;
+constexpr int8_t kTftBacklight = 1;  // TFT LED
+constexpr int8_t kTouchCs = 0;
+constexpr int8_t kTouchIrq = 24;
+
+constexpr uint32_t kTftSpiHz = 40000000;
+constexpr uint8_t kTftRotation = 1;       // Landscape, 320x240, pins on the left.
+constexpr uint32_t kTouchPollMs = 30;
+#endif
+
 }  // namespace config

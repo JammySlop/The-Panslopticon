@@ -66,6 +66,7 @@ class StoreTest(unittest.TestCase):
         s = self.store.state(at=2_000)
         self.assertEqual(len(s["tables"]["clients"]["rows"]), 1)
         self.assertEqual(s["tables"]["aps"]["rows"][0]["clients"], 2)
+        self.assertEqual(s["tables"]["aps"]["rows"][0]["history"], [])  # No RSSI to plot.
         self.assertEqual([c["ch"] for c in s["channels"]], [1, 36])
         self.assertEqual(s["alerts"][0]["count"], 12)
         self.assertEqual(s["last"], {"cycle": 1, "up": 30, "at": 1_000})
