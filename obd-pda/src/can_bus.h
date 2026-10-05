@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "can_frame.h"
+
 namespace can_bus {
 
 enum class Mode : uint8_t {
@@ -11,13 +13,7 @@ enum class Mode : uint8_t {
     Normal,      // needed to send OBD requests
 };
 
-struct Frame {
-    uint32_t id = 0;
-    bool extended = false;
-    bool rtr = false;
-    uint8_t dlc = 0;
-    uint8_t data[8] = {};
-};
+using Frame = CanFrame;
 
 struct Stats {
     uint32_t rxFrames = 0;

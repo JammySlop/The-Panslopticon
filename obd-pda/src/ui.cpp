@@ -1,14 +1,16 @@
 #include "ui.h"
 
 #include <Arduino.h>
-#include <Preferences.h>
+#include <WiFi.h>
+
+#include <algorithm>
 
 #include "buttons.h"
-#include "can_bus.h"
 #include "config.h"
 #include "display.h"
+#include "link.h"
 #include "obd.h"
-#include "vbat.h"
+#include "settings.h"
 
 namespace ui {
 namespace {
@@ -35,31 +37,14 @@ constexpr uint16_t kChanged = 0xFFE0;  // yellow
 LGFX_Sprite gRow(&lcd);   // one sniffer row
 LGFX_Sprite gTile(&lcd);  // one live-data tile
 
-// --- Settings (persisted) ----------------------------------------------------
-
-constexpr uint32_t kRateChoices[] = {0, 500000, 250000, 125000};  // 0 = auto
-constexpr uint8_t kBrightChoices[] = {40, 100, 160, 200, 255};
-
-Preferences gPrefs;
-uint32_t gRateSetting = 0;
-uint8_t gBrightness = config::kBacklightDefault;
-
-void loadSettings() {
-    gPrefs.begin("obdpda", false);
-    gRateSetting = gPrefs.getUInt("rate", 0);
-    gBrightness = gPrefs.getUChar("bl", config::kBacklightDefault);
-}
-
-void saveSettings() {
-    gPrefs.putUInt("rate", gRateSetting);
-    gPrefs.putUChar("bl", gBrightness);
-}
+obdlink::Link& link() { return obdlink::active(); }
 
 // --- Common drawing ------------------------------------------------------------
 
 const char* gTitle = "";
 char gHeaderNote[16] = "";
-float gShownVolts = -1;
+float gShownVolts = -100;
+int gShownLinkState = -1;
 
 void drawHeader() {
     lcd.fillRect(0, 0, kW, kHeaderH, kHeaderBg);
@@ -70,9 +55,10 @@ void drawHeader() {
     if (gHeaderNote[0]) {
         lcd.setTextColor(kAccent, kHeaderBg);
         lcd.setTextDatum(textdatum_t::middle_center);
-        lcd.drawString(gHeaderNote, 140, kHeaderH / 2);
+        lcd.drawString(gHeaderNote, 128, kHeaderH / 2);
     }
-    gShownVolts = -1;  // force the voltage to redraw
+    gShownVolts = -100;  // force the status area to redraw
+    gShownLinkState = -1;
 }
 
 void setHeaderNote(const char* note) {
@@ -81,18 +67,32 @@ void setHeaderNote(const char* note) {
     drawHeader();
 }
 
-void updateHeaderVolts() {
-    const float v = vbat::volts();
+// Battery voltage as the link sees it: ATRV from an ELM, or our own divider
+// on the direct-CAN build (in ELM mode that pin may be floating).
+float headerVolts() { return link().batteryVolts(); }
+
+// Right side of the header: link name (green when connected) and volts.
+void updateHeaderStatus() {
+    const int state = link().connected() ? 1 : 0;
+    if (state != gShownLinkState) {
+        gShownLinkState = state;
+        lcd.fillRect(kW - 84, 0, 30, kHeaderH, kHeaderBg);
+        lcd.setFont(&fonts::Font2);
+        lcd.setTextDatum(textdatum_t::middle_right);
+        lcd.setTextColor(state ? kGood : kDim, kHeaderBg);
+        lcd.drawString(link().shortName(), kW - 56, kHeaderH / 2);
+    }
+    const float v = headerVolts();
     if (fabsf(v - gShownVolts) < 0.05f) return;
     gShownVolts = v;
     char buf[12];
     if (v > 0) snprintf(buf, sizeof(buf), "%.1fV", v);
-    else strlcpy(buf, "USB", sizeof(buf));
+    else strlcpy(buf, "--.-V", sizeof(buf));
     lcd.fillRect(kW - 52, 0, 52, kHeaderH, kHeaderBg);
     lcd.setFont(&fonts::Font2);
     lcd.setTextDatum(textdatum_t::middle_right);
     // Below ~12.0 V a resting lead-acid battery is getting flat.
-    lcd.setTextColor(v == 0 ? kDim : v < 12.0f ? kWarn : kGood, kHeaderBg);
+    lcd.setTextColor(v <= 0 ? kDim : v < 12.0f ? kWarn : kGood, kHeaderBg);
     lcd.drawString(buf, kW - 6, kHeaderH / 2);
 }
 
@@ -116,36 +116,29 @@ void rateLabel(uint32_t rate, char* out, size_t len) {
     else snprintf(out, len, "%luk", static_cast<unsigned long>(rate / 1000));
 }
 
-// --- Bus ownership -------------------------------------------------------------
-
-uint32_t gDetectedRate = 0;
-bool gDiscovered = false;
-
-// Opens the bus in `mode`, auto-detecting the bitrate on first use. Draws a
-// message and returns false if there is no bus to talk to.
-bool openBus(can_bus::Mode mode) {
-    uint32_t rate = gRateSetting;
-    if (rate == 0) {
-        if (gDetectedRate == 0) {
-            message("Detecting bus speed...");
-            gDetectedRate = can_bus::autodetect();
-        }
-        rate = gDetectedRate;
-    }
-    if (rate == 0) {
-        message("No CAN traffic found", "Ignition on? Wiring? Long-press: back", kWarn);
-        return false;
-    }
-    if (!can_bus::ensure(rate, mode)) {
-        message("CAN driver failed to start", nullptr, kBad);
-        return false;
-    }
-    return true;
+void ecuLabel(uint32_t id, char* out, size_t len) {
+    snprintf(out, len, id > 0x7FF ? "%08lX" : "%03lX", static_cast<unsigned long>(id));
 }
 
-// Normal mode plus a cached PID discovery; needed by every OBD screen.
+// --- Link ownership -------------------------------------------------------------
+
+bool gDiscovered = false;
+
+void connectStatus(const char* line) { message(line); }
+
+// Connects if needed. Draws the reason and returns false on failure.
+bool openLink() {
+    if (link().connected()) return true;
+    gDiscovered = false;
+    if (link().connect(connectStatus)) return true;
+    const bool elm = settings::get().link == settings::LinkKind::Elm327Wifi;
+    message(link().lastError(), elm ? "Dongle plugged in? Ignition on?" : "Ignition on? Wiring?", kWarn);
+    return false;
+}
+
+// Connected, with the car's supported PIDs known; needed by every OBD screen.
 bool openObd() {
-    if (!openBus(can_bus::Mode::Normal)) return false;
+    if (!openLink()) return false;
     if (!gDiscovered) {
         message("Querying ECUs...");
         gDiscovered = obd::discover() > 0;
@@ -159,15 +152,17 @@ bool openObd() {
 
 // --- Screens -------------------------------------------------------------------
 
-enum class Screen : uint8_t { Menu, Live, Sniffer, Dtc, Info, Settings };
+enum class Screen : uint8_t { Menu, Live, Sniffer, Dtc, Info, Settings, WifiPick };
 
 struct ScreenDef {
     void (*enter)();
     void (*tick)();
     void (*event)(Event ev);
+    void (*leave)();
 };
 
 void go(Screen s);
+void noop() {}
 
 // ---- Menu ----
 
@@ -203,8 +198,6 @@ void menuEnter() {
     lcd.drawString("UP/DOWN move  SELECT open", kW / 2, kH - 4);
 }
 
-void menuTick() {}
-
 void menuEvent(Event ev) {
     const int old = gMenuSel;
     if (ev == Event::Up) gMenuSel = (gMenuSel + kMenuCount - 1) % kMenuCount;
@@ -231,7 +224,6 @@ constexpr size_t kMaxLive = 32;
 const obd::PidInfo* gLive[kMaxLive];  // supported PIDs, in display order
 float gLiveValue[kMaxLive];
 bool gLiveValid[kMaxLive];
-bool gLiveDirty[kMaxLive];
 size_t gLiveCount = 0;
 size_t gLivePage = 0;
 size_t gLiveNext = 0;  // next tile on the page to poll
@@ -266,7 +258,6 @@ void drawTile(size_t index) {
     gTile.setTextColor(gLiveValid[index] ? kFg : kDim);
     gTile.drawString(buf, kTileW / 2, kTileH / 2 + 2);
     gTile.pushSprite(x, y);
-    gLiveDirty[index] = false;
 }
 
 void drawLivePage() {
@@ -292,7 +283,6 @@ void liveEnter() {
         if (!obd::isSupported(all[i].pid)) continue;
         gLive[gLiveCount] = &all[i];
         gLiveValid[gLiveCount] = false;
-        gLiveDirty[gLiveCount] = true;
         ++gLiveCount;
     }
     if (gLiveCount == 0) {
@@ -307,6 +297,11 @@ void liveEnter() {
 
 void liveTick() {
     if (!gLiveOk) return;
+    if (!link().connected()) {
+        gLiveOk = false;
+        message(link().lastError(), "SELECT: reconnect", kWarn);
+        return;
+    }
     const uint32_t now = millis();
     if (now - gLiveLastPoll < config::kLivePollGapMs) return;
     gLiveLastPoll = now;
@@ -325,7 +320,11 @@ void liveTick() {
 }
 
 void liveEvent(Event ev) {
-    if (!gLiveOk || livePages() <= 1) return;
+    if (!gLiveOk) {
+        if (ev == Event::Select) liveEnter();
+        return;
+    }
+    if (livePages() <= 1) return;
     if (ev == Event::Down || ev == Event::Select) gLivePage = (gLivePage + 1) % livePages();
     else if (ev == Event::Up) gLivePage = (gLivePage + livePages() - 1) % livePages();
     else return;
@@ -356,20 +355,22 @@ struct SnifferRow {
 constexpr int kSnifferFooterH = 18;
 constexpr int kSnifferRowH = 16;
 constexpr int kSnifferRows = (kH - kHeaderH - kSnifferFooterH) / kSnifferRowH;
+// Frames handled per loop, so a busy bus can't starve the buttons and display.
+constexpr int kSnifferFramesPerTick = 200;
 
 SnifferEntry gEntries[config::kSnifferMaxIds];
 size_t gEntryCount = 0;
-uint32_t gDroppedIds = 0;
 SnifferRow gRows[kSnifferRows];
 size_t gSnifferTop = 0;
 bool gSnifferPaused = false;
 bool gSnifferOk = false;
 uint32_t gLastRateCalc = 0;
 uint32_t gLastSnifferDraw = 0;
+uint32_t gSnifferFrames = 0;
 uint32_t gFramesAtLastRate = 0;
-uint32_t gBusRate = 0;  // total frames/s
+uint32_t gBusRate = 0;  // total frames/s seen
 
-void snifferIngest(const can_bus::Frame& f, uint32_t now) {
+void snifferIngest(const CanFrame& f, uint32_t now) {
     const uint32_t key = f.id | (f.extended ? 0x80000000u : 0);
     // Binary search for the insertion point.
     size_t lo = 0, hi = gEntryCount;
@@ -379,10 +380,7 @@ void snifferIngest(const can_bus::Frame& f, uint32_t now) {
         else hi = mid;
     }
     if (lo == gEntryCount || gEntries[lo].key != key) {
-        if (gEntryCount >= config::kSnifferMaxIds) {
-            ++gDroppedIds;
-            return;
-        }
+        if (gEntryCount >= config::kSnifferMaxIds) return;
         memmove(&gEntries[lo + 1], &gEntries[lo], (gEntryCount - lo) * sizeof(SnifferEntry));
         ++gEntryCount;
         SnifferEntry& e = gEntries[lo];
@@ -453,45 +451,56 @@ void drawSnifferRow(int row, uint32_t now) {
 }
 
 void drawSnifferFooter() {
-    const can_bus::Stats st = can_bus::stats();
     char buf[48];
-    snprintf(buf, sizeof(buf), "%u ids  %lu/s  %s  miss %lu", unsigned(gEntryCount),
-             static_cast<unsigned long>(gBusRate), st.state, static_cast<unsigned long>(st.rxMissed));
+    snprintf(buf, sizeof(buf), "%u ids  %lu/s  dropped %lu", unsigned(gEntryCount),
+             static_cast<unsigned long>(gBusRate), static_cast<unsigned long>(link().monitorDropped()));
     const int y = kH - kSnifferFooterH;
     lcd.fillRect(0, y, kW, kSnifferFooterH, kHeaderBg);
     lcd.setFont(&fonts::Font2);
     lcd.setTextDatum(textdatum_t::middle_left);
-    lcd.setTextColor(strcmp(st.state, "ok") == 0 ? kDim : kWarn, kHeaderBg);
+    lcd.setTextColor(link().monitorDropped() ? kWarn : kDim, kHeaderBg);
     lcd.drawString(buf, 4, y + kSnifferFooterH / 2);
 }
+
+void snifferNote() { setHeaderNote(gSnifferPaused ? "PAUSED" : link().monitorIsLossless() ? "" : "lossy"); }
 
 void snifferEnter() {
     gTitle = "Sniffer";
     gHeaderNote[0] = '\0';
     drawHeader();
-    gSnifferOk = openBus(can_bus::Mode::ListenOnly);
-    if (!gSnifferOk) return;
+    gSnifferOk = openLink() && link().startMonitor();
+    if (!gSnifferOk) {
+        if (link().connected()) message("Could not start monitor mode", nullptr, kBad);
+        return;
+    }
     clearBody();
-    char note[16];
-    rateLabel(can_bus::bitrate(), note, sizeof(note));
-    setHeaderNote(gSnifferPaused ? "PAUSED" : note);
+    snifferNote();
     for (SnifferRow& r : gRows) r = SnifferRow();
     drawSnifferFooter();
 }
 
+void snifferLeave() {
+    if (gSnifferOk) link().stopMonitor();
+    gSnifferOk = false;
+}
+
 void snifferTick() {
     if (!gSnifferOk) return;
+    if (!link().connected()) {
+        gSnifferOk = false;
+        message(link().lastError(), "SELECT: reconnect", kWarn);
+        return;
+    }
     const uint32_t now = millis();
-    can_bus::Frame f;
-    // Drain everything waiting; a full queue means lost frames.
-    while (can_bus::receive(f, 0)) {
+    CanFrame f;
+    for (int i = 0; i < kSnifferFramesPerTick && link().readMonitor(f); ++i) {
+        ++gSnifferFrames;
         if (!gSnifferPaused) snifferIngest(f, now);
     }
 
     if (now - gLastRateCalc >= 1000) {
-        const uint32_t total = can_bus::stats().rxFrames;
-        gBusRate = total - gFramesAtLastRate;
-        gFramesAtLastRate = total;
+        gBusRate = gSnifferFrames - gFramesAtLastRate;
+        gFramesAtLastRate = gSnifferFrames;
         for (size_t i = 0; i < gEntryCount; ++i) {
             SnifferEntry& e = gEntries[i];
             e.rate = static_cast<uint16_t>(min<uint32_t>(e.count - e.countAtLastRate, UINT16_MAX));
@@ -521,15 +530,16 @@ void snifferTick() {
 }
 
 void snifferEvent(Event ev) {
-    if (!gSnifferOk) return;
+    if (!gSnifferOk) {
+        if (ev == Event::Select) snifferEnter();
+        return;
+    }
     const size_t maxTop = gEntryCount > size_t(kSnifferRows) ? gEntryCount - kSnifferRows : 0;
     if (ev == Event::Up && gSnifferTop > 0) --gSnifferTop;
     if (ev == Event::Down && gSnifferTop < maxTop) ++gSnifferTop;
     if (ev == Event::Select) {
         gSnifferPaused = !gSnifferPaused;
-        char note[16];
-        rateLabel(can_bus::bitrate(), note, sizeof(note));
-        setHeaderNote(gSnifferPaused ? "PAUSED" : note);
+        snifferNote();
     }
     for (SnifferRow& r : gRows) r.drawnAt = 0;
 }
@@ -568,10 +578,10 @@ void drawDtcList() {
         lcd.drawString(d.code, 8, y);
         lcd.setFont(&fonts::Font2);
         lcd.setTextColor(kDim, kBg);
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%s  %03lX", d.pending ? "pending" : "stored",
-                 static_cast<unsigned long>(d.ecuId));
-        lcd.drawString(buf, 110, y + 6);
+        char ecu[12], buf[28];
+        ecuLabel(d.ecuId, ecu, sizeof(ecu));
+        snprintf(buf, sizeof(buf), "%s  %s", d.pending ? "pending" : "stored", ecu);
+        lcd.drawString(buf, 100, y + 6);
         y += kLineH;
     }
     lcd.setFont(&fonts::Font2);
@@ -600,8 +610,6 @@ void dtcEnter() {
     readDtcs();
 }
 
-void dtcTick() {}
-
 void dtcEvent(Event ev) {
     if (ev == Event::Select) {
         readDtcs();
@@ -621,27 +629,33 @@ void infoLine(int& y, const char* label, const char* value, uint16_t color = kFg
     lcd.setTextDatum(textdatum_t::top_left);
     lcd.setTextColor(kDim, kBg);
     lcd.drawString(label, 8, y);
+    y += 16;
     lcd.setTextColor(color, kBg);
-    lcd.drawString(value, 8, y + 16);
-    y += 40;
+    // Values may span several '\n'-separated lines.
+    char buf[128];
+    strlcpy(buf, value, sizeof(buf));
+    for (char* line = strtok(buf, "\n"); line; line = strtok(nullptr, "\n")) {
+        lcd.drawString(line, 8, y);
+        y += 16;
+    }
+    y += 8;
 }
 
 void infoEnter() {
     gTitle = "Vehicle info";
     gHeaderNote[0] = '\0';
     drawHeader();
-    const bool ok = openObd();
+    if (!openObd()) return;
+    message("Reading VIN...");
     char vin[18] = "";
-    const bool haveVin = ok && obd::readVin(vin, sizeof(vin));
-    if (!ok) return;
+    const bool haveVin = obd::readVin(vin, sizeof(vin));
 
     clearBody();
     int y = kHeaderH + 8;
-    char buf[32];
+    char buf[128];
     infoLine(y, "VIN", haveVin ? vin : "not reported", haveVin ? kFg : kDim);
-    rateLabel(can_bus::bitrate(), buf, sizeof(buf));
-    strlcat(buf, gRateSetting == 0 ? " (detected)" : " (fixed)", sizeof(buf));
-    infoLine(y, "CAN bitrate", buf);
+    link().describe(buf, sizeof(buf));
+    infoLine(y, "Connection", buf);
     snprintf(buf, sizeof(buf), "%u", unsigned(obd::ecuCount()));
     infoLine(y, "OBD ECUs answering", buf);
     size_t total = 0, supported = 0;
@@ -649,41 +663,54 @@ void infoEnter() {
     for (size_t i = 0; i < total; ++i) supported += obd::isSupported(pids[i].pid);
     snprintf(buf, sizeof(buf), "%u of %u", unsigned(supported), unsigned(total));
     infoLine(y, "Live PIDs supported", buf);
-    const float v = vbat::volts();
+    const float v = headerVolts();
     if (v > 0) snprintf(buf, sizeof(buf), "%.2f V", v);
-    else strlcpy(buf, "no 12 V (USB power)", sizeof(buf));
+    else strlcpy(buf, "unknown", sizeof(buf));
     infoLine(y, "Battery at OBD port", buf);
 }
 
-void infoTick() {}
 void infoEvent(Event ev) {
     if (ev == Event::Select) infoEnter();
 }
 
 // ---- Settings ----
 
+constexpr uint32_t kRateChoices[] = {0, 500000, 250000, 125000};  // 0 = auto
+constexpr uint8_t kBrightChoices[] = {40, 100, 160, 200, 255};
+
+enum SettingItem { kSetLink, kSetWifi, kSetRate, kSetBright, kSetReconnect, kSetCount };
 int gSetSel = 0;
-constexpr int kSetCount = 3;
+constexpr int kSetRowH = 52;
 
 void drawSettings() {
     clearBody();
-    char value[24];
-    const char* labels[kSetCount] = {"CAN bitrate", "Brightness", "Re-detect bus"};
+    const settings::Settings& s = settings::get();
+    const bool elm = s.link == settings::LinkKind::Elm327Wifi;
+    static const char* const kLabels[kSetCount] = {"Connection", "Dongle WiFi network", "CAN bitrate (direct)",
+                                                   "Brightness", "Reconnect"};
+    char value[64];
     for (int i = 0; i < kSetCount; ++i) {
-        const int y = kHeaderH + 12 + i * 52;
+        const int y = kHeaderH + 6 + i * kSetRowH;
         const bool sel = i == gSetSel;
+        // Settings that don't apply to the current link are greyed out.
+        const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm));
         const uint16_t bg = sel ? kSelectBg : kBg;
-        lcd.fillRoundRect(8, y, kW - 16, 46, 6, bg);
-        if (sel) lcd.drawRoundRect(8, y, kW - 16, 46, 6, kAccent);
+        lcd.fillRoundRect(8, y, kW - 16, kSetRowH - 6, 6, bg);
+        if (sel) lcd.drawRoundRect(8, y, kW - 16, kSetRowH - 6, 6, kAccent);
         lcd.setFont(&fonts::Font2);
         lcd.setTextDatum(textdatum_t::top_left);
         lcd.setTextColor(kDim, bg);
-        lcd.drawString(labels[i], 18, y + 5);
-        value[0] = '\0';
-        if (i == 0) rateLabel(gRateSetting, value, sizeof(value));
-        if (i == 1) snprintf(value, sizeof(value), "%u%%", unsigned(gBrightness * 100 / 255));
-        if (i == 2) strlcpy(value, "press SELECT", sizeof(value));
-        lcd.setTextColor(kFg, bg);
+        lcd.drawString(kLabels[i], 18, y + 5);
+        switch (i) {
+            case kSetLink: strlcpy(value, elm ? "ELM327 over WiFi" : "Direct CAN transceiver", sizeof(value)); break;
+            case kSetWifi:
+                snprintf(value, sizeof(value), "%s%s", s.wifiSsid, s.wifiPass[0] ? " (pw set)" : "");
+                break;
+            case kSetRate: rateLabel(s.canBitrate, value, sizeof(value)); break;
+            case kSetBright: snprintf(value, sizeof(value), "%u%%", unsigned(s.brightness * 100 / 255)); break;
+            default: strlcpy(value, link().connected() ? "connected - press to redo" : "press SELECT", sizeof(value));
+        }
+        lcd.setTextColor(applies ? kFg : kDim, bg);
         lcd.drawString(value, 18, y + 23);
     }
 }
@@ -695,63 +722,196 @@ void settingsEnter() {
     drawSettings();
 }
 
-void settingsTick() {}
-
 void settingsEvent(Event ev) {
+    settings::Settings& s = settings::get();
     if (ev == Event::Up) gSetSel = (gSetSel + kSetCount - 1) % kSetCount;
     if (ev == Event::Down) gSetSel = (gSetSel + 1) % kSetCount;
     if (ev == Event::Select) {
-        if (gSetSel == 0) {
-            size_t i = 0;
-            while (i < 4 && kRateChoices[i] != gRateSetting) ++i;
-            gRateSetting = kRateChoices[(i + 1) % 4];
-            can_bus::end();
-            gDiscovered = false;
-        } else if (gSetSel == 1) {
-            size_t i = 0;
-            while (i < 5 && kBrightChoices[i] < gBrightness) ++i;
-            gBrightness = kBrightChoices[(i + 1) % 5];
-            lcd.setBrightness(gBrightness);
-        } else {
-            can_bus::end();
-            gDetectedRate = 0;
-            gDiscovered = false;
-            if (openBus(can_bus::Mode::ListenOnly)) {
-                char buf[32], rate[12];
-                rateLabel(can_bus::bitrate(), rate, sizeof(rate));
-                snprintf(buf, sizeof(buf), "Found %s", rate);
-                message(buf, nullptr, kGood);
+        switch (gSetSel) {
+            case kSetLink:
+                s.link = s.link == settings::LinkKind::Elm327Wifi ? settings::LinkKind::DirectCan
+                                                                    : settings::LinkKind::Elm327Wifi;
+                obdlink::select(s.link);
+                gDiscovered = false;
+                break;
+            case kSetWifi:
+                if (s.link == settings::LinkKind::Elm327Wifi) {
+                    go(Screen::WifiPick);
+                    return;
+                }
+                break;
+            case kSetRate: {
+                size_t i = 0;
+                while (i < 4 && kRateChoices[i] != s.canBitrate) ++i;
+                s.canBitrate = kRateChoices[(i + 1) % 4];
+                if (s.link == settings::LinkKind::DirectCan) link().disconnect();
+                break;
             }
-            delay(1200);
+            case kSetBright: {
+                size_t i = 0;
+                while (i < 5 && kBrightChoices[i] < s.brightness) ++i;
+                s.brightness = kBrightChoices[(i + 1) % 5];
+                lcd.setBrightness(s.brightness);
+                break;
+            }
+            default:
+                link().disconnect();
+                if (openLink()) {
+                    message("Connected", link().shortName(), kGood);
+                    delay(800);
+                } else {
+                    delay(2000);  // leave the failure reason up for a moment
+                }
+                break;
         }
-        saveSettings();
+        settings::save();
     }
     drawSettings();
+}
+
+// ---- WiFi network picker ----
+
+struct Network {
+    char ssid[33];
+    int32_t rssi;
+    bool open;
+    bool likelyObd;
+};
+
+constexpr size_t kMaxNetworks = 16;
+constexpr int kNetRowH = 30;
+constexpr int kNetRows = (kH - kHeaderH - 24) / kNetRowH;
+Network gNets[kMaxNetworks];
+size_t gNetCount = 0;
+size_t gNetSel = 0;
+
+// Names the common ELM327 WiFi clones use for their access point.
+bool looksLikeObd(const char* ssid) {
+    static const char* const kHints[] = {"OBD", "ELM", "V-LINK", "VLINK", "VGATE", "ICAR", "KONNWEI", "CAR"};
+    char upper[33];
+    size_t n = 0;
+    for (; ssid[n] && n < 32; ++n) upper[n] = static_cast<char>(toupper(static_cast<unsigned char>(ssid[n])));
+    upper[n] = '\0';
+    for (const char* hint : kHints) {
+        if (strstr(upper, hint)) return true;
+    }
+    return false;
+}
+
+void drawNetworks() {
+    clearBody();
+    if (gNetCount == 0) {
+        message("No WiFi networks found", "SELECT: scan again", kWarn);
+        return;
+    }
+    const size_t top = gNetSel >= size_t(kNetRows) ? gNetSel - kNetRows + 1 : 0;
+    for (size_t i = top; i < gNetCount && i < top + kNetRows; ++i) {
+        const Network& n = gNets[i];
+        const int y = kHeaderH + 4 + (i - top) * kNetRowH;
+        const bool sel = i == gNetSel;
+        const uint16_t bg = sel ? kSelectBg : kBg;
+        lcd.fillRoundRect(4, y, kW - 8, kNetRowH - 3, 4, bg);
+        lcd.setFont(&fonts::Font2);
+        lcd.setTextDatum(textdatum_t::middle_left);
+        lcd.setTextColor(n.likelyObd ? kAccent : kFg, bg);
+        lcd.drawString(n.ssid, 10, y + (kNetRowH - 3) / 2);
+        char meta[16];
+        snprintf(meta, sizeof(meta), "%s%ld", n.open ? "" : "lock ", static_cast<long>(n.rssi));
+        lcd.setTextDatum(textdatum_t::middle_right);
+        lcd.setTextColor(kDim, bg);
+        lcd.drawString(meta, kW - 10, y + (kNetRowH - 3) / 2);
+    }
+    lcd.setTextDatum(textdatum_t::bottom_center);
+    lcd.setTextColor(kDim, kBg);
+    lcd.drawString("SELECT use   hold: back", kW / 2, kH - 4);
+}
+
+void scanNetworks() {
+    message("Scanning for WiFi...");
+    link().disconnect();
+    WiFi.mode(WIFI_STA);
+    const int found = WiFi.scanNetworks();
+    gNetCount = 0;
+    for (int i = 0; i < found && gNetCount < kMaxNetworks; ++i) {
+        const String ssid = WiFi.SSID(i);
+        if (ssid.isEmpty()) continue;  // hidden network
+        bool dup = false;
+        for (size_t j = 0; j < gNetCount; ++j) dup |= strcmp(gNets[j].ssid, ssid.c_str()) == 0;
+        if (dup) continue;
+        Network& n = gNets[gNetCount++];
+        strlcpy(n.ssid, ssid.c_str(), sizeof(n.ssid));
+        n.rssi = WiFi.RSSI(i);
+        n.open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+        n.likelyObd = looksLikeObd(n.ssid);
+    }
+    WiFi.scanDelete();
+    WiFi.mode(WIFI_OFF);
+    // Likely dongles first, then strongest signal.
+    std::sort(gNets, gNets + gNetCount, [](const Network& a, const Network& b) {
+        if (a.likelyObd != b.likelyObd) return a.likelyObd;
+        return a.rssi > b.rssi;
+    });
+    gNetSel = 0;
+}
+
+void wifiEnter() {
+    gTitle = "Pick dongle";
+    gHeaderNote[0] = '\0';
+    drawHeader();
+    scanNetworks();
+    drawNetworks();
+}
+
+void wifiEvent(Event ev) {
+    if (gNetCount == 0) {
+        if (ev == Event::Select) wifiEnter();
+        return;
+    }
+    if (ev == Event::Up && gNetSel > 0) --gNetSel;
+    if (ev == Event::Down && gNetSel + 1 < gNetCount) ++gNetSel;
+    if (ev == Event::Select) {
+        settings::Settings& s = settings::get();
+        const Network& n = gNets[gNetSel];
+        if (strcmp(s.wifiSsid, n.ssid) != 0) s.wifiPass[0] = '\0';  // old password was for another network
+        strlcpy(s.wifiSsid, n.ssid, sizeof(s.wifiSsid));
+        settings::save();
+        if (!n.open && !s.wifiPass[0]) {
+            message("This network needs a password", "Set it over USB: pass <password>", kWarn);
+            delay(2500);
+        }
+        go(Screen::Settings);
+        return;
+    }
+    drawNetworks();
 }
 
 // ---- Dispatch ----
 
 constexpr ScreenDef kScreens[] = {
-    {menuEnter, menuTick, menuEvent},          {liveEnter, liveTick, liveEvent},
-    {snifferEnter, snifferTick, snifferEvent}, {dtcEnter, dtcTick, dtcEvent},
-    {infoEnter, infoTick, infoEvent},          {settingsEnter, settingsTick, settingsEvent},
+    {menuEnter, noop, menuEvent, noop},
+    {liveEnter, liveTick, liveEvent, noop},
+    {snifferEnter, snifferTick, snifferEvent, snifferLeave},
+    {dtcEnter, noop, dtcEvent, noop},
+    {infoEnter, noop, infoEvent, noop},
+    {settingsEnter, noop, settingsEvent, noop},
+    {wifiEnter, noop, wifiEvent, noop},
 };
 
 Screen gScreen = Screen::Menu;
 
 void go(Screen s) {
+    kScreens[static_cast<int>(gScreen)].leave();
     gScreen = s;
     kScreens[static_cast<int>(s)].enter();
-    updateHeaderVolts();
+    updateHeaderStatus();
 }
 
 }  // namespace
 
 void begin() {
-    loadSettings();
     lcd.init();
     lcd.setRotation(0);  // portrait, connector at the top
-    lcd.setBrightness(gBrightness);
+    lcd.setBrightness(settings::get().brightness);
     lcd.fillScreen(kBg);
     gRow.setColorDepth(16);
     gRow.createSprite(kW, kSnifferRowH);
@@ -762,13 +922,17 @@ void begin() {
 
 void loop() {
     const Event ev = buttons::poll();
-    if (ev == Event::Back && gScreen != Screen::Menu) {
+    if (ev == Event::Back && gScreen == Screen::WifiPick) {
+        go(Screen::Settings);
+    } else if (ev == Event::Back && gScreen != Screen::Menu) {
         go(Screen::Menu);
     } else if (ev != Event::None) {
         kScreens[static_cast<int>(gScreen)].event(ev);
     }
     kScreens[static_cast<int>(gScreen)].tick();
-    updateHeaderVolts();
+    updateHeaderStatus();
 }
+
+void refresh() { go(gScreen); }
 
 }  // namespace ui

@@ -81,6 +81,33 @@ constexpr uint32_t kIsoTpFrameTimeoutMs = 150;
 // Live data: minimum gap between PID requests, to stay polite on the bus.
 constexpr uint32_t kLivePollGapMs = 20;
 
+// --- ELM327 WiFi dongle -------------------------------------------------------
+// Almost every cheap WiFi ELM327 clone is an open access point called
+// something like "WiFi_OBDII", listening on 192.168.0.10 port 35000. The
+// network can be picked on the Settings screen, so this is just the default.
+constexpr char kElmDefaultSsid[] = "WiFi_OBDII";
+// Used only if DHCP does not give us a gateway address (the dongle itself).
+constexpr char kElmFallbackHost[] = "192.168.0.10";
+// Tried in order when no port is configured.
+constexpr uint16_t kElmPorts[] = {35000, 23};
+
+constexpr uint32_t kWifiConnectTimeoutMs = 12000;
+constexpr uint32_t kElmTcpConnectTimeoutMs = 3000;
+// ATZ reboots the ELM; clones take up to ~1.5 s to print their banner.
+constexpr uint32_t kElmResetTimeoutMs = 3000;
+constexpr uint32_t kElmCommandTimeoutMs = 1000;
+// The first request after ATSP0 makes the ELM try every protocol in turn.
+constexpr uint32_t kElmSearchTimeoutMs = 12000;
+// One OBD request: WiFi round trip plus the ELM's own ~200 ms ECU timeout.
+constexpr uint32_t kElmResponseTimeoutMs = 1500;
+// Append the "expected responses" digit to single-frame PID requests (e.g.
+// "010C1") so the ELM answers as soon as one ECU replies instead of waiting
+// out its timeout. Roughly triples the live-data rate. Some very old fake
+// "v2.1" clones choke on it; set false if live data shows only "--".
+constexpr bool kElmUseResponseCount = true;
+// How often the header refreshes battery voltage via ATRV.
+constexpr uint32_t kElmVoltsPollMs = 3000;
+
 // --- Sniffer ------------------------------------------------------------------
 // Unique arbitration IDs tracked. A busy powertrain bus has 50-150.
 constexpr size_t kSnifferMaxIds = 160;

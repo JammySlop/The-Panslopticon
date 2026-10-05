@@ -8,7 +8,7 @@ namespace obd {
 
 // One reassembled ISO-TP reply from one ECU.
 struct Response {
-    uint32_t ecuId = 0;  // 0x7E8-0x7EF
+    uint32_t ecuId = 0;  // 0x7E8-0x7EF, or 0x18DAF1xx with 29-bit addressing
     uint8_t data[255] = {};
     size_t len = 0;
     bool negative = false;  // ECU answered 0x7F (service not supported, etc.)

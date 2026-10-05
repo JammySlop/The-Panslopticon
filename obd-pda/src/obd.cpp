@@ -3,13 +3,14 @@
 #include <Arduino.h>
 #include <string.h>
 
-#include "can_bus.h"
 #include "config.h"
+#include "link.h"
 
 namespace obd {
 namespace {
 
-constexpr size_t kMaxEcus = config::kObdReplyIdLast - config::kObdReplyIdFirst + 1;
+// Up to 8 emission ECUs may answer a broadcast request.
+constexpr size_t kMaxEcus = 8;
 constexpr uint8_t kNegativeResponse = 0x7F;
 
 // Per-ECU ISO-TP reassembly state.
@@ -22,16 +23,6 @@ struct Assembly {
 
 uint32_t gSupported[8] = {};  // bit i of gSupported[w] = PID (w*32 + i + 1)
 size_t gEcuCount = 0;
-
-void sendFlowControl(uint32_t ecuId) {
-    can_bus::Frame fc;
-    fc.id = ecuId - 8;  // each ECU listens on its reply ID minus 8
-    fc.dlc = 8;
-    fc.data[0] = 0x30;  // flow control: continue to send
-    fc.data[1] = 0x00;  // block size 0: send everything without waiting
-    fc.data[2] = 0x00;  // STmin 0 ms: as fast as the ECU likes
-    can_bus::send(fc, 20);
-}
 
 // Decoders, formulas from SAE J1979 / the Wikipedia "OBD-II PIDs" table.
 float pct(const uint8_t* d) { return d[0] * 100.0f / 255.0f; }
@@ -101,44 +92,55 @@ size_t collectDtcs(uint8_t service, bool pending, Dtc* out, size_t maxOut) {
     return written;
 }
 
+bool isObdReply(const CanFrame& f) {
+    if (!f.extended) return f.id >= config::kObdReplyIdFirst && f.id <= config::kObdReplyIdLast;
+    // 29-bit addressing (ISO 15765-4): ECU xx replies to the tester as 18DAF1xx.
+    return (f.id & 0xFFFFFF00u) == 0x18DAF100u;
+}
+
 }  // namespace
 
 size_t request(const uint8_t* req, size_t reqLen, Response* out, size_t maxOut, bool firstOnly) {
     if (reqLen == 0 || reqLen > 7 || maxOut == 0) return 0;
-    if (!can_bus::running() || can_bus::mode() != can_bus::Mode::Normal) return 0;
+    obdlink::Link& link = obdlink::active();
+    if (!link.connected() || !link.beginRequest(req, reqLen, firstOnly)) return 0;
 
-    can_bus::Frame frame;
-    frame.id = config::kObdBroadcastId;
-    frame.dlc = 8;  // ISO 15765-4 requires padded 8-byte frames
-    frame.data[0] = static_cast<uint8_t>(reqLen);
-    memcpy(&frame.data[1], req, reqLen);
-
-    can_bus::flush();
-    if (!can_bus::send(frame, 20)) return 0;
-
-    const uint8_t positive = req[0] + 0x40;
-    Assembly state[kMaxEcus];
-    int8_t slotOf[kMaxEcus];  // ECU index -> slot in `out`, or -1
-    memset(slotOf, -1, sizeof(slotOf));
+    // One slot per replying ECU, in order of first reply; slot i fills out[i].
+    struct Slot {
+        uint32_t id;
+        Assembly a;
+    };
+    Slot slots[kMaxEcus];
+    const size_t maxSlots = min(maxOut, kMaxEcus);
     size_t used = 0;
-    uint32_t deadline = millis() + config::kObdResponseTimeoutMs;
+    const uint8_t positive = req[0] + 0x40;
+    uint32_t deadline = millis() + link.responseTimeoutMs();
+    // Never shorten the deadline, only extend it while a multi-frame reply is
+    // still arriving.
+    auto extend = [&deadline](uint32_t ms) {
+        const uint32_t until = millis() + ms;
+        if (static_cast<int32_t>(until - deadline) > 0) deadline = until;
+    };
 
     while (static_cast<int32_t>(deadline - millis()) > 0) {
-        can_bus::Frame rx;
-        if (!can_bus::receive(rx, 5)) continue;
-        if (rx.extended || rx.id < config::kObdReplyIdFirst || rx.id > config::kObdReplyIdLast) {
-            continue;  // other bus traffic
+        CanFrame rx;
+        const obdlink::Next next = link.nextFrame(rx, 5);
+        if (next == obdlink::Next::End) break;
+        if (next == obdlink::Next::Timeout || !isObdReply(rx)) continue;
+
+        size_t slot = 0;
+        while (slot < used && slots[slot].id != rx.id) ++slot;
+        if (slot == used) {
+            if (used >= maxSlots) continue;
+            slots[used].id = rx.id;
+            slots[used].a = Assembly();
+            out[used] = Response();
+            out[used].ecuId = rx.id;
+            ++used;
         }
-        const size_t ecu = rx.id - config::kObdReplyIdFirst;
-        Assembly& a = state[ecu];
+        Assembly& a = slots[slot].a;
+        Response& r = out[slot];
         if (a.done) continue;
-        if (slotOf[ecu] < 0) {
-            if (used >= maxOut) continue;
-            slotOf[ecu] = static_cast<int8_t>(used++);
-            out[slotOf[ecu]] = Response();
-            out[slotOf[ecu]].ecuId = rx.id;
-        }
-        Response& r = out[slotOf[ecu]];
 
         switch (rx.data[0] >> 4) {
             case 0x0: {  // single frame
@@ -160,8 +162,8 @@ size_t request(const uint8_t* req, size_t reqLen, Response* out, size_t maxOut, 
                 a.expected = len;
                 a.nextSeq = 1;
                 a.active = true;
-                sendFlowControl(rx.id);
-                deadline = millis() + config::kIsoTpFrameTimeoutMs;
+                link.sendFlowControl(rx.id);
+                extend(config::kIsoTpFrameTimeoutMs);
                 break;
             }
             case 0x2: {  // consecutive frame
@@ -170,7 +172,7 @@ size_t request(const uint8_t* req, size_t reqLen, Response* out, size_t maxOut, 
                 memcpy(&r.data[r.len], &rx.data[1], take);
                 r.len += take;
                 a.nextSeq = (a.nextSeq + 1) & 0x0F;
-                deadline = millis() + config::kIsoTpFrameTimeoutMs;
+                extend(config::kIsoTpFrameTimeoutMs);
                 if (r.len >= a.expected) a.done = true;
                 break;
             }
@@ -187,15 +189,10 @@ size_t request(const uint8_t* req, size_t reqLen, Response* out, size_t maxOut, 
         if (firstOnly && !r.negative) break;
     }
 
-    // Compact in slot order (never overwriting a slot not yet visited): keep
-    // only finished, non-empty responses.
+    // Keep only finished, non-empty responses, in arrival order.
     size_t kept = 0;
     for (size_t slot = 0; slot < used; ++slot) {
-        bool keep = false;
-        for (size_t ecu = 0; ecu < kMaxEcus; ++ecu) {
-            if (slotOf[ecu] == static_cast<int8_t>(slot)) keep = state[ecu].done && out[slot].len > 0;
-        }
-        if (!keep) continue;
+        if (!slots[slot].a.done || out[slot].len == 0) continue;
         if (slot != kept) out[kept] = out[slot];
         ++kept;
     }
@@ -209,7 +206,8 @@ const PidInfo* livePids(size_t& count) {
 
 size_t discover() {
     memset(gSupported, 0, sizeof(gSupported));
-    uint32_t ecusSeen = 0;  // bit per ECU index
+    uint32_t ecusSeen[kMaxEcus];
+    size_t seen = 0;
     for (uint8_t base = 0x00; base <= 0xC0; base += 0x20) {
         // Each range PID reports the next 32; only ask for ranges the car
         // said exist (PID 00 always does).
@@ -219,7 +217,9 @@ size_t discover() {
         const size_t n = request(req, sizeof(req), resp, kMaxEcus, false);
         for (size_t r = 0; r < n; ++r) {
             if (resp[r].negative || resp[r].len < 6 || resp[r].data[1] != base) continue;
-            ecusSeen |= 1u << (resp[r].ecuId - config::kObdReplyIdFirst);
+            size_t e = 0;
+            while (e < seen && ecusSeen[e] != resp[r].ecuId) ++e;
+            if (e == seen && seen < kMaxEcus) ecusSeen[seen++] = resp[r].ecuId;
             const uint32_t bits = (uint32_t(resp[r].data[2]) << 24) | (uint32_t(resp[r].data[3]) << 16) |
                                   (uint32_t(resp[r].data[4]) << 8) | resp[r].data[5];
             // The bitmap is MSB-first: the top bit is PID base+1. Bit-reverse
@@ -231,7 +231,7 @@ size_t discover() {
             gSupported[base / 0x20] |= reversed;
         }
     }
-    gEcuCount = __builtin_popcount(ecusSeen);
+    gEcuCount = seen;
     return gEcuCount;
 }
 
