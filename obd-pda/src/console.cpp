@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "buttons.h"
+#include "config.h"
 #include "link.h"
 #include "settings.h"
 #include "ui.h"
@@ -32,6 +34,7 @@ void help() {
     Serial.println("  host <ip>|auto       dongle address (auto = WiFi gateway)");
     Serial.println("  port <n>|auto        dongle TCP port");
     Serial.println("  link elm|can         ELM327 over WiFi, or direct CAN transceiver");
+    Serial.println("  nav                  which nav key is held (and the ladder voltage)");
 }
 
 void handle(char* line) {
@@ -52,12 +55,25 @@ void handle(char* line) {
         strlcpy(s.elmHost, strcmp(arg, "auto") == 0 ? "" : arg, sizeof(s.elmHost));
     } else if (strcmp(line, "port") == 0 && *arg) {
         s.elmPort = strcmp(arg, "auto") == 0 ? 0 : static_cast<uint16_t>(atoi(arg));
+    } else if (strcmp(line, "link") == 0 && strcmp(arg, "can") == 0 && !config::kDirectCanAvailable) {
+        Serial.println("direct CAN needs the ladder nav wiring (kNavWiring in config.h): "
+                       "digital wiring uses the CAN pins");
+        return;
     } else if (strcmp(line, "link") == 0 && (strcmp(arg, "elm") == 0 || strcmp(arg, "can") == 0)) {
         s.link = arg[0] == 'e' ? settings::LinkKind::Elm327Wifi : settings::LinkKind::DirectCan;
         obdlink::select(s.link);
     } else {
         changed = false;
-        if (strcmp(line, "show") == 0) show();
+        if (strcmp(line, "show") == 0) {
+            show();
+        } else if (strcmp(line, "nav") == 0) {
+            // Hold a direction and type "nav" to check the ladder thresholds.
+            Serial.printf("held: %s", buttons::heldKeyName());
+            if (config::kNavWiring == config::NavWiring::Ladder) {
+                Serial.printf("  ladder: %u mV", buttons::ladderMillivolts());
+            }
+            Serial.println();
+        }
         else if (line[0]) help();
     }
     if (!changed) return;

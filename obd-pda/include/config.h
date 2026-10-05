@@ -13,8 +13,8 @@ namespace config {
 //
 // Strapping pins are GPIO2, GPIO8 and GPIO9. GPIO8 (on-board LED) and GPIO9
 // (on-board BOOT button) are used for what the board already wires them to,
-// and GPIO2 is a button input that idles high, so nothing pulls a strapping
-// pin the wrong way at reset.
+// and GPIO2 is a switch input that idles high, so nothing pulls a strapping
+// pin the wrong way at reset (just don't hold LEFT while powering on).
 
 // 2" 240x320 ST7789 display (silkscreen: GND VCC SCL SDA RES DC CS BLK).
 // SCL/SDA on these modules are the SPI clock and MOSI, not I2C.
@@ -29,22 +29,62 @@ constexpr int kPinLcdRst = 21;
 // keeps the backlight on until then.
 constexpr int kPinLcdBacklight = 20;
 
-// CAN transceiver (SN65HVD230 or similar 3.3 V part). The C3's built-in TWAI
-// controller speaks CAN 2.0; the transceiver turns it into CAN-H / CAN-L.
+// --- 5-way navigation switch ---------------------------------------------------
+// A 5-way tactile switch (up/down/left/right/centre push) drives the UI. It can
+// be wired two ways; pick the matching build environment (see platformio.ini)
+// and wire as in README.md.
+enum class NavWiring : uint8_t {
+    // One GPIO per direction, each switch to GND, internal pull-ups. The most
+    // reliable, and the switch lands on the five left-header pins in order.
+    // Uses GPIO0-4, so the direct-CAN link (which needs 0, 1 and 3) is not
+    // available in this build.
+    Digital,
+    // All five directions on one ADC pin through a resistor ladder, leaving
+    // GPIO0, 1 and 3 for the CAN transceiver and battery sense.
+    Ladder,
+};
+// Set by the build environment: `c3_supermini` (default) is digital,
+// `c3_supermini_ladder` defines OBD_PDA_NAV_LADDER.
+#ifdef OBD_PDA_NAV_LADDER
+constexpr NavWiring kNavWiring = NavWiring::Ladder;
+#else
+constexpr NavWiring kNavWiring = NavWiring::Digital;
+#endif
+
+// Digital wiring: module pin -> GPIO, in left-header order.
+constexpr int kPinNavUp = 4;
+constexpr int kPinNavDown = 3;
+constexpr int kPinNavLeft = 2;   // strapping pin: idles high, fine as an input
+constexpr int kPinNavRight = 1;
+constexpr int kPinNavCenter = 0;
+
+// Ladder wiring: 10k pull-up from the pin to 3V3; each direction switches a
+// different resistor to GND, giving V = 3.3 * R / (R + 10k):
+//   centre 0R -> 0.00 V, up 1k -> 0.30 V, down 3.3k -> 0.82 V,
+//   left 6.8k -> 1.34 V, right 15k -> 1.98 V, released -> 3.3 V.
+// Thresholds sit halfway between neighbours. Calculated, not measured: check
+// the readings with the "nav" console command and adjust if needed.
+constexpr int kPinNavLadder = 4;
+constexpr uint16_t kNavLadderThresholdsMv[] = {150, 560, 1080, 1660, 2400};
+
+// The board's BOOT button (GPIO9) always works as an extra centre/select.
+constexpr int kPinBootButton = 9;
+
+// The direct-CAN link needs GPIO0, 1 and 3, which digital nav wiring uses.
+constexpr bool kDirectCanAvailable = kNavWiring == NavWiring::Ladder;
+
+// CAN transceiver (SN65HVD230 or similar 3.3 V part), ladder builds only.
+// The C3's built-in TWAI controller speaks CAN 2.0; the transceiver turns it
+// into CAN-H / CAN-L.
 constexpr int kPinCanTx = 0;
 constexpr int kPinCanRx = 1;
 
-// Vehicle battery voltage through a 100k / 18k divider (ADC1 channel 3).
+// Vehicle battery voltage through a 100k / 18k divider (ADC1 channel 3),
+// direct-CAN builds only. In ELM mode the dongle reports it (ATRV).
 constexpr int kPinVbatSense = 3;
 constexpr float kVbatDividerRatio = (100.0f + 18.0f) / 18.0f;
 // Calculated, not measured: trim against a multimeter once built.
 constexpr float kVbatCalibration = 1.0f;
-
-// Buttons, active low with the internal pull-up. SELECT is the BOOT button
-// already on the board (GPIO9); an external button can be wired in parallel.
-constexpr int kPinButtonUp = 4;
-constexpr int kPinButtonDown = 2;
-constexpr int kPinButtonSelect = 9;
 
 // On-board blue LED, active low. Blinks on CAN traffic.
 constexpr int kPinStatusLed = 8;
@@ -119,7 +159,7 @@ constexpr uint32_t kSnifferRedrawMs = 100;
 // --- UI ---------------------------------------------------------------------
 constexpr uint32_t kButtonDebounceMs = 25;
 constexpr uint32_t kButtonLongPressMs = 600;
-constexpr uint32_t kButtonRepeatMs = 120;  // auto-repeat while UP/DOWN held
+constexpr uint32_t kButtonRepeatMs = 120;  // auto-repeat while a direction is held
 constexpr uint32_t kUiFrameMs = 50;        // screen refresh period
 constexpr uint32_t kVbatSampleMs = 500;
 

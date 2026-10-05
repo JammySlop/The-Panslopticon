@@ -195,14 +195,14 @@ void menuEnter() {
     lcd.setFont(&fonts::Font2);
     lcd.setTextDatum(textdatum_t::bottom_center);
     lcd.setTextColor(kDim, kBg);
-    lcd.drawString("UP/DOWN move  SELECT open", kW / 2, kH - 4);
+    lcd.drawString("Up/down: move   Press: open", kW / 2, kH - 4);
 }
 
 void menuEvent(Event ev) {
     const int old = gMenuSel;
     if (ev == Event::Up) gMenuSel = (gMenuSel + kMenuCount - 1) % kMenuCount;
     if (ev == Event::Down) gMenuSel = (gMenuSel + 1) % kMenuCount;
-    if (ev == Event::Select) {
+    if (ev == Event::Select || ev == Event::Right) {
         go(kMenuTargets[gMenuSel]);
         return;
     }
@@ -325,8 +325,11 @@ void liveEvent(Event ev) {
         return;
     }
     if (livePages() <= 1) return;
-    if (ev == Event::Down || ev == Event::Select) gLivePage = (gLivePage + 1) % livePages();
-    else if (ev == Event::Up) gLivePage = (gLivePage + livePages() - 1) % livePages();
+    if (ev == Event::Down || ev == Event::Right || ev == Event::Select) {
+        gLivePage = (gLivePage + 1) % livePages();
+    } else if (ev == Event::Up || ev == Event::Left) {
+        gLivePage = (gLivePage + livePages() - 1) % livePages();
+    }
     else return;
     gLiveNext = 0;
     drawLivePage();
@@ -537,6 +540,9 @@ void snifferEvent(Event ev) {
     const size_t maxTop = gEntryCount > size_t(kSnifferRows) ? gEntryCount - kSnifferRows : 0;
     if (ev == Event::Up && gSnifferTop > 0) --gSnifferTop;
     if (ev == Event::Down && gSnifferTop < maxTop) ++gSnifferTop;
+    // Left/right jump a screenful.
+    if (ev == Event::Left) gSnifferTop = gSnifferTop > size_t(kSnifferRows) ? gSnifferTop - kSnifferRows : 0;
+    if (ev == Event::Right) gSnifferTop = min(gSnifferTop + kSnifferRows, maxTop);
     if (ev == Event::Select) {
         gSnifferPaused = !gSnifferPaused;
         snifferNote();
@@ -587,7 +593,7 @@ void drawDtcList() {
     lcd.setFont(&fonts::Font2);
     lcd.setTextDatum(textdatum_t::bottom_center);
     lcd.setTextColor(kDim, kBg);
-    lcd.drawString("SELECT re-read   hold: back", kW / 2, kH - 4);
+    lcd.drawString("Press: re-read   Left/hold: back", kW / 2, kH - 4);
 }
 
 void readDtcs() {
@@ -693,7 +699,8 @@ void drawSettings() {
         const int y = kHeaderH + 6 + i * kSetRowH;
         const bool sel = i == gSetSel;
         // Settings that don't apply to the current link are greyed out.
-        const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm));
+        const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm) ||
+                               (i == kSetLink && !config::kDirectCanAvailable));
         const uint16_t bg = sel ? kSelectBg : kBg;
         lcd.fillRoundRect(8, y, kW - 16, kSetRowH - 6, 6, bg);
         if (sel) lcd.drawRoundRect(8, y, kW - 16, kSetRowH - 6, 6, kAccent);
@@ -702,7 +709,10 @@ void drawSettings() {
         lcd.setTextColor(kDim, bg);
         lcd.drawString(kLabels[i], 18, y + 5);
         switch (i) {
-            case kSetLink: strlcpy(value, elm ? "ELM327 over WiFi" : "Direct CAN transceiver", sizeof(value)); break;
+            case kSetLink:
+                strlcpy(value, elm ? "ELM327 over WiFi" : "Direct CAN transceiver", sizeof(value));
+                if (!config::kDirectCanAvailable) strlcat(value, " (only)", sizeof(value));
+                break;
             case kSetWifi:
                 snprintf(value, sizeof(value), "%s%s", s.wifiSsid, s.wifiPass[0] ? " (pw set)" : "");
                 break;
@@ -722,39 +732,46 @@ void settingsEnter() {
     drawSettings();
 }
 
+// Left/right step a value back/forward; press does the same as right.
 void settingsEvent(Event ev) {
     settings::Settings& s = settings::get();
     if (ev == Event::Up) gSetSel = (gSetSel + kSetCount - 1) % kSetCount;
     if (ev == Event::Down) gSetSel = (gSetSel + 1) % kSetCount;
-    if (ev == Event::Select) {
+    const int step = ev == Event::Left ? -1 : (ev == Event::Right || ev == Event::Select) ? 1 : 0;
+    if (step != 0) {
         switch (gSetSel) {
             case kSetLink:
+                if (!config::kDirectCanAvailable) break;  // only one choice
                 s.link = s.link == settings::LinkKind::Elm327Wifi ? settings::LinkKind::DirectCan
                                                                     : settings::LinkKind::Elm327Wifi;
                 obdlink::select(s.link);
                 gDiscovered = false;
                 break;
             case kSetWifi:
-                if (s.link == settings::LinkKind::Elm327Wifi) {
+                if (step > 0 && s.link == settings::LinkKind::Elm327Wifi) {
                     go(Screen::WifiPick);
                     return;
                 }
                 break;
             case kSetRate: {
+                constexpr size_t n = sizeof(kRateChoices) / sizeof(kRateChoices[0]);
                 size_t i = 0;
-                while (i < 4 && kRateChoices[i] != s.canBitrate) ++i;
-                s.canBitrate = kRateChoices[(i + 1) % 4];
+                while (i < n && kRateChoices[i] != s.canBitrate) ++i;
+                s.canBitrate = kRateChoices[(i + n + step) % n];
                 if (s.link == settings::LinkKind::DirectCan) link().disconnect();
                 break;
             }
             case kSetBright: {
-                size_t i = 0;
-                while (i < 5 && kBrightChoices[i] < s.brightness) ++i;
-                s.brightness = kBrightChoices[(i + 1) % 5];
+                constexpr int n = sizeof(kBrightChoices) / sizeof(kBrightChoices[0]);
+                int i = 0;
+                while (i < n - 1 && kBrightChoices[i] < s.brightness) ++i;
+                i = constrain(i + step, 0, n - 1);  // no wrap: dim stays dim
+                s.brightness = kBrightChoices[i];
                 lcd.setBrightness(s.brightness);
                 break;
             }
             default:
+                if (step < 0) break;
                 link().disconnect();
                 if (openLink()) {
                     message("Connected", link().shortName(), kGood);
@@ -823,7 +840,7 @@ void drawNetworks() {
     }
     lcd.setTextDatum(textdatum_t::bottom_center);
     lcd.setTextColor(kDim, kBg);
-    lcd.drawString("SELECT use   hold: back", kW / 2, kH - 4);
+    lcd.drawString("Press: use   Left/hold: back", kW / 2, kH - 4);
 }
 
 void scanNetworks() {
@@ -922,9 +939,12 @@ void begin() {
 
 void loop() {
     const Event ev = buttons::poll();
-    if (ev == Event::Back && gScreen == Screen::WifiPick) {
+    // Screens that have no sideways action treat LEFT as back.
+    const bool leftIsBack = gScreen == Screen::Dtc || gScreen == Screen::Info || gScreen == Screen::WifiPick;
+    const Event action = (ev == Event::Left && leftIsBack) ? Event::Back : ev;
+    if (action == Event::Back && gScreen == Screen::WifiPick) {
         go(Screen::Settings);
-    } else if (ev == Event::Back && gScreen != Screen::Menu) {
+    } else if (action == Event::Back && gScreen != Screen::Menu) {
         go(Screen::Menu);
     } else if (ev != Event::None) {
         kScreens[static_cast<int>(gScreen)].event(ev);

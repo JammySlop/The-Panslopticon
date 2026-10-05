@@ -7,10 +7,13 @@
 namespace buttons {
 namespace {
 
-struct Button {
-    int pin;
-    bool repeats;  // auto-repeat while held (UP/DOWN)
-    bool stable = false;  // debounced state, true = pressed
+enum Key : uint8_t { kUp, kDown, kLeft, kRight, kCenter, kKeyCount };
+
+const char* const kKeyNames[kKeyCount] = {"up", "down", "left", "right", "centre"};
+constexpr Event kKeyEvents[kKeyCount] = {Event::Up, Event::Down, Event::Left, Event::Right, Event::Select};
+
+struct KeyState {
+    bool stable = false;  // debounced, true = pressed
     bool lastRaw = false;
     uint32_t changedAt = 0;
     uint32_t pressedAt = 0;
@@ -18,64 +21,104 @@ struct Button {
     bool longFired = false;
 };
 
-Button gUp{config::kPinButtonUp, true};
-Button gDown{config::kPinButtonDown, true};
-Button gSelect{config::kPinButtonSelect, false};
+KeyState gKeys[kKeyCount];
+uint16_t gLadderMv = 0;
 
-// Updates the debounced state. Returns +1 on press, -1 on release, 0 otherwise.
-int debounce(Button& b, uint32_t now) {
-    const bool raw = digitalRead(b.pin) == LOW;
-    if (raw != b.lastRaw) {
-        b.lastRaw = raw;
-        b.changedAt = now;
+// Which keys are physically down right now (before debouncing).
+void readRaw(bool raw[kKeyCount]) {
+    if (config::kNavWiring == config::NavWiring::Digital) {
+        raw[kUp] = digitalRead(config::kPinNavUp) == LOW;
+        raw[kDown] = digitalRead(config::kPinNavDown) == LOW;
+        raw[kLeft] = digitalRead(config::kPinNavLeft) == LOW;
+        raw[kRight] = digitalRead(config::kPinNavRight) == LOW;
+        raw[kCenter] = digitalRead(config::kPinNavCenter) == LOW;
+    } else {
+        // The ladder can only report one direction at a time; the lowest
+        // voltage band wins. Bands, low to high: centre, up, down, left,
+        // right, then released.
+        gLadderMv = analogReadMilliVolts(config::kPinNavLadder);
+        static constexpr Key kBandKeys[] = {kCenter, kUp, kDown, kLeft, kRight};
+        for (int i = 0; i < kKeyCount; ++i) raw[i] = false;
+        for (size_t band = 0; band < sizeof(kBandKeys) / sizeof(kBandKeys[0]); ++band) {
+            if (gLadderMv < config::kNavLadderThresholdsMv[band]) {
+                raw[kBandKeys[band]] = true;
+                break;
+            }
+        }
     }
-    if (raw == b.stable || now - b.changedAt < config::kButtonDebounceMs) return 0;
-    b.stable = raw;
-    return raw ? 1 : -1;
+    // BOOT is always a second centre button.
+    raw[kCenter] = raw[kCenter] || digitalRead(config::kPinBootButton) == LOW;
 }
 
-Event pollRepeating(Button& b, Event ev, uint32_t now) {
-    const int edge = debounce(b, now);
-    if (edge > 0) {
-        b.pressedAt = b.lastRepeat = now;
-        return ev;
+// Updates the debounced state. Returns +1 on press, -1 on release, 0 otherwise.
+int debounce(KeyState& k, bool raw, uint32_t now) {
+    if (raw != k.lastRaw) {
+        k.lastRaw = raw;
+        k.changedAt = now;
     }
-    if (b.stable && now - b.pressedAt >= config::kButtonLongPressMs &&
-        now - b.lastRepeat >= config::kButtonRepeatMs) {
-        b.lastRepeat = now;
-        return ev;
-    }
-    return Event::None;
+    if (raw == k.stable || now - k.changedAt < config::kButtonDebounceMs) return 0;
+    k.stable = raw;
+    return raw ? 1 : -1;
 }
 
 }  // namespace
 
 void begin() {
-    pinMode(config::kPinButtonUp, INPUT_PULLUP);
-    pinMode(config::kPinButtonDown, INPUT_PULLUP);
-    pinMode(config::kPinButtonSelect, INPUT_PULLUP);
+    if (config::kNavWiring == config::NavWiring::Digital) {
+        for (int pin : {config::kPinNavUp, config::kPinNavDown, config::kPinNavLeft, config::kPinNavRight,
+                        config::kPinNavCenter}) {
+            pinMode(pin, INPUT_PULLUP);
+        }
+    } else {
+        // External 10k pull-up; the internal ~45k one is too loose for a ladder.
+        pinMode(config::kPinNavLadder, INPUT);
+        analogSetPinAttenuation(config::kPinNavLadder, ADC_11db);
+    }
+    pinMode(config::kPinBootButton, INPUT_PULLUP);
 }
 
 Event poll() {
     const uint32_t now = millis();
-    Event ev = pollRepeating(gUp, Event::Up, now);
-    if (ev != Event::None) return ev;
-    ev = pollRepeating(gDown, Event::Down, now);
-    if (ev != Event::None) return ev;
+    bool raw[kKeyCount];
+    readRaw(raw);
 
-    // SELECT fires on release so a long press can become BACK instead.
-    const int edge = debounce(gSelect, now);
-    if (edge > 0) {
-        gSelect.pressedAt = now;
-        gSelect.longFired = false;
-    } else if (gSelect.stable && !gSelect.longFired &&
-               now - gSelect.pressedAt >= config::kButtonLongPressMs) {
-        gSelect.longFired = true;
-        return Event::Back;
-    } else if (edge < 0 && !gSelect.longFired) {
-        return Event::Select;
+    Event result = Event::None;
+    for (int i = 0; i < kKeyCount; ++i) {
+        KeyState& k = gKeys[i];
+        const int edge = debounce(k, raw[i], now);
+        Event ev = Event::None;
+        if (i == kCenter) {
+            // Centre fires on release, so a long hold can become Back instead.
+            if (edge > 0) {
+                k.pressedAt = now;
+                k.longFired = false;
+            } else if (k.stable && !k.longFired && now - k.pressedAt >= config::kButtonLongPressMs) {
+                k.longFired = true;
+                ev = Event::Back;
+            } else if (edge < 0 && !k.longFired) {
+                ev = Event::Select;
+            }
+        } else if (edge > 0) {
+            k.pressedAt = k.lastRepeat = now;
+            ev = kKeyEvents[i];
+        } else if (k.stable && now - k.pressedAt >= config::kButtonLongPressMs &&
+                   now - k.lastRepeat >= config::kButtonRepeatMs) {
+            k.lastRepeat = now;
+            ev = kKeyEvents[i];
+        }
+        // Keep debouncing every key, but report only the first event.
+        if (result == Event::None) result = ev;
     }
-    return Event::None;
+    return result;
+}
+
+uint16_t ladderMillivolts() { return gLadderMv; }
+
+const char* heldKeyName() {
+    for (int i = 0; i < kKeyCount; ++i) {
+        if (gKeys[i].stable) return kKeyNames[i];
+    }
+    return "none";
 }
 
 }  // namespace buttons

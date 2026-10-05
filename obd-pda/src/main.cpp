@@ -41,13 +41,14 @@ void setup() {
     settings::load();
     obdlink::select(settings::get().link);
     buttons::begin();
-    vbat::begin();
+    // The battery divider shares GPIO3 with the digital nav switch.
+    if (config::kDirectCanAvailable) vbat::begin();
     ui::begin();
 }
 
 void loop() {
     obdlink::active().service();
-    vbat::update();
+    if (config::kDirectCanAvailable) vbat::update();
     console::poll();
     ui::loop();
     updateActivityLed();
