@@ -5,36 +5,11 @@
 #include "console.h"
 #include "link.h"
 #include "settings.h"
+#include "storage.h"
 #include "ui.h"
 #include "vbat.h"
 
-namespace {
-
-uint32_t gLastFrames = 0;
-uint32_t gLedOffAt = 0;
-
-void setLed(bool on) {
-    digitalWrite(config::kPinStatusLed, on != config::kStatusLedActiveLow ? HIGH : LOW);
-}
-
-// Flash the on-board LED briefly whenever frames arrive.
-void updateActivityLed() {
-    const uint32_t frames = obdlink::active().frameCount();
-    const uint32_t now = millis();
-    if (frames != gLastFrames) {
-        gLastFrames = frames;
-        setLed(true);
-        gLedOffAt = now + 30;
-    } else if (static_cast<int32_t>(now - gLedOffAt) >= 0) {
-        setLed(false);
-    }
-}
-
-}  // namespace
-
 void setup() {
-    pinMode(config::kPinStatusLed, OUTPUT);
-    setLed(false);
     Serial.begin(config::kSerialBaud);
     Serial.printf("\n=== OBD PDA (%s) === type \"help\" for commands\n", ESP.getChipModel());
 
@@ -44,6 +19,10 @@ void setup() {
     // The battery divider shares GPIO3 with the digital nav switch.
     if (config::kDirectCanAvailable) vbat::begin();
     ui::begin();
+    // After the display: it starts the SPI bus the card shares. (GPIO8 is the
+    // card's chip select; the on-board LED on it now shows card activity.)
+    storage::begin();
+    storage::event("power-up, firmware built " __DATE__ " " __TIME__);
 }
 
 void loop() {
@@ -51,6 +30,6 @@ void loop() {
     if (config::kDirectCanAvailable) vbat::update();
     console::poll();
     ui::loop();
-    updateActivityLed();
+    storage::service();
     delay(1);  // let the idle task run
 }

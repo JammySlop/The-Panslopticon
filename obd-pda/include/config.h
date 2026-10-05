@@ -11,23 +11,34 @@ namespace config {
 // Left header:  5V  G  3V3  4  3  2  1  0
 // Right header: 5  6  7  8  9  10  20  21
 //
-// Strapping pins are GPIO2, GPIO8 and GPIO9. GPIO8 (on-board LED) and GPIO9
-// (on-board BOOT button) are used for what the board already wires them to,
+// Strapping pins are GPIO2, GPIO8 and GPIO9. GPIO9 is the on-board BOOT
+// button, GPIO8 (on-board LED) is the SD card's chip select, which idles high,
 // and GPIO2 is a switch input that idles high, so nothing pulls a strapping
 // pin the wrong way at reset (just don't hold LEFT while powering on).
 
+// One SPI bus, shared by the display and the micro SD card.
+// SCL/SDA on the display module are the SPI clock and MOSI, not I2C.
+constexpr int kPinSpiSclk = 6;
+constexpr int kPinSpiMosi = 7;
+// Only the SD card talks back. GPIO20 is UART0 RX, an input at boot, so the
+// ROM boot log never drives it against the card.
+constexpr int kPinSpiMiso = 20;
+
 // 2" 240x320 ST7789 display (silkscreen: GND VCC SCL SDA RES DC CS BLK).
-// SCL/SDA on these modules are the SPI clock and MOSI, not I2C.
-constexpr int kPinLcdSclk = 6;
-constexpr int kPinLcdMosi = 7;
 constexpr int kPinLcdCs = 10;
 constexpr int kPinLcdDc = 5;
 // GPIO21 is UART0 TX, so the ROM boot log wiggles it for a moment at power-on.
 // That only resets the display, which setup() initialises afterwards anyway.
 constexpr int kPinLcdRst = 21;
-// GPIO20 (UART0 RX) is an input until setup() runs; the module's own pull-up
-// keeps the backlight on until then.
-constexpr int kPinLcdBacklight = 20;
+// BLK is wired to 3V3: the backlight is on whenever the device is, which
+// frees the GPIO that dimming would need.
+
+// 6-pin micro SD module (GND VCC MISO MOSI SCK CS). GPIO8 also drives the
+// board's blue LED (active low), so the LED lights while the card is accessed.
+constexpr int kPinSdCs = 8;
+// 20 MHz is safe through the level shifter on the common blue modules; the
+// card itself does 25.
+constexpr uint32_t kSdSpiHz = 20000000;
 
 // --- 5-way navigation switch ---------------------------------------------------
 // A 5-way tactile switch (up/down/left/right/centre push) drives the UI. It can
@@ -86,15 +97,10 @@ constexpr float kVbatDividerRatio = (100.0f + 18.0f) / 18.0f;
 // Calculated, not measured: trim against a multimeter once built.
 constexpr float kVbatCalibration = 1.0f;
 
-// On-board blue LED, active low. Blinks on CAN traffic.
-constexpr int kPinStatusLed = 8;
-constexpr bool kStatusLedActiveLow = true;
-
 // --- Display -----------------------------------------------------------------
 constexpr uint32_t kLcdSpiHz = 40000000;  // 80 MHz often works too; 40 is safe.
 // Most 2" ST7789 modules need colour inversion; flip this if colours look wrong.
 constexpr bool kLcdInvert = true;
-constexpr uint8_t kBacklightDefault = 200;  // 0-255
 
 // --- CAN / OBD-II -----------------------------------------------------------
 // OBD-II over CAN (ISO 15765-4) runs at 500 kbit/s on almost every car since
@@ -105,7 +111,9 @@ constexpr uint32_t kAutodetectListenMs = 400;
 
 // The sniffer never transmits, so it runs the controller in listen-only mode:
 // it does not even acknowledge frames. OBD queries need normal mode.
-constexpr uint32_t kCanRxQueueLen = 64;
+// Big enough to ride out a slow SD card write while logging (~130 ms at a
+// busy 2000 frames/s); frames are ~20 bytes of RAM each.
+constexpr uint32_t kCanRxQueueLen = 256;
 constexpr uint32_t kCanTxQueueLen = 8;
 
 // 11-bit OBD addressing. 0x7DF reaches every emission ECU; replies come from
@@ -155,6 +163,15 @@ constexpr size_t kSnifferMaxIds = 160;
 constexpr uint32_t kSnifferHighlightMs = 600;
 // Row redraw period. Busy IDs change every few ms; the eye can't follow faster.
 constexpr uint32_t kSnifferRedrawMs = 100;
+
+// --- SD card logging --------------------------------------------------------
+// Everything goes under /obdpda/<session>/, one numbered folder per power-up
+// that writes anything (there is no clock, so no dates).
+constexpr char kSdRootDir[] = "/obdpda";
+// Log lines collect in RAM and are written in chunks, then flushed to the
+// card at least this often. Bounds what a power cut can lose.
+constexpr size_t kLogBufferBytes = 4096;
+constexpr uint32_t kLogFlushMs = 1000;
 
 // --- UI ---------------------------------------------------------------------
 constexpr uint32_t kButtonDebounceMs = 25;

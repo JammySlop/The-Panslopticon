@@ -11,7 +11,6 @@ public:
 private:
     lgfx::Panel_ST7789 panel_;
     lgfx::Bus_SPI bus_;
-    lgfx::Light_PWM light_;
 };
 
 // One shared instance; the UI is the only thing that draws.

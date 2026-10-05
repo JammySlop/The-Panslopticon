@@ -7,6 +7,7 @@
 #include "config.h"
 #include "link.h"
 #include "settings.h"
+#include "storage.h"
 #include "ui.h"
 
 namespace console {
@@ -35,6 +36,7 @@ void help() {
     Serial.println("  port <n>|auto        dongle TCP port");
     Serial.println("  link elm|can         ELM327 over WiFi, or direct CAN transceiver");
     Serial.println("  nav                  which nav key is held (and the ladder voltage)");
+    Serial.println("  sd                   SD card status; \"sd mount\" retries after swapping cards");
 }
 
 void handle(char* line) {
@@ -66,6 +68,16 @@ void handle(char* line) {
         changed = false;
         if (strcmp(line, "show") == 0) {
             show();
+        } else if (strcmp(line, "sd") == 0) {
+            if (strcmp(arg, "mount") == 0) storage::remount();
+            if (storage::mounted()) {
+                Serial.printf("SD: %llu of %llu MB free, session %s, %lu bytes dropped\n",
+                              storage::freeBytes() / (1024 * 1024), storage::totalBytes() / (1024 * 1024),
+                              storage::sessionDir()[0] ? storage::sessionDir() : "(none yet)",
+                              static_cast<unsigned long>(storage::droppedBytes()));
+            } else {
+                Serial.println("SD: no card");
+            }
         } else if (strcmp(line, "nav") == 0) {
             // Hold a direction and type "nav" to check the ladder thresholds.
             Serial.printf("held: %s", buttons::heldKeyName());

@@ -14,9 +14,10 @@ Display::Display() {
         cfg.spi_3wire = false;
         cfg.use_lock = true;
         cfg.dma_channel = SPI_DMA_CH_AUTO;
-        cfg.pin_sclk = config::kPinLcdSclk;
-        cfg.pin_mosi = config::kPinLcdMosi;
-        cfg.pin_miso = -1;  // write-only module
+        cfg.pin_sclk = config::kPinSpiSclk;
+        cfg.pin_mosi = config::kPinSpiMosi;
+        // The display never reads, but the SD card on the same bus does.
+        cfg.pin_miso = config::kPinSpiMiso;
         cfg.pin_dc = config::kPinLcdDc;
         bus_.config(cfg);
         panel_.setBus(&bus_);
@@ -37,17 +38,10 @@ Display::Display() {
         cfg.invert = config::kLcdInvert;
         cfg.rgb_order = false;
         cfg.dlen_16bit = false;
-        cfg.bus_shared = false;
+        // Shared with the SD card: release the bus after every draw call.
+        cfg.bus_shared = true;
         panel_.config(cfg);
     }
-    {
-        auto cfg = light_.config();
-        cfg.pin_bl = config::kPinLcdBacklight;
-        cfg.invert = false;
-        cfg.freq = 12000;
-        cfg.pwm_channel = 0;
-        light_.config(cfg);
-        panel_.setLight(&light_);
-    }
+    // No backlight control: BLK is wired to 3V3.
     setPanel(&panel_);
 }

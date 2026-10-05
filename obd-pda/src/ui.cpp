@@ -11,6 +11,7 @@
 #include "link.h"
 #include "obd.h"
 #include "settings.h"
+#include "storage.h"
 
 namespace ui {
 namespace {
@@ -45,6 +46,7 @@ const char* gTitle = "";
 char gHeaderNote[16] = "";
 float gShownVolts = -100;
 int gShownLinkState = -1;
+int gShownRec = -1;
 
 void drawHeader() {
     lcd.fillRect(0, 0, kW, kHeaderH, kHeaderBg);
@@ -59,6 +61,7 @@ void drawHeader() {
     }
     gShownVolts = -100;  // force the status area to redraw
     gShownLinkState = -1;
+    gShownRec = -1;
 }
 
 void setHeaderNote(const char* note) {
@@ -73,6 +76,12 @@ float headerVolts() { return link().batteryVolts(); }
 
 // Right side of the header: link name (green when connected) and volts.
 void updateHeaderStatus() {
+    // Red dot while a log is recording to the SD card.
+    const int rec = storage::isOpen(storage::Stream::Sniff) || storage::isOpen(storage::Stream::Live);
+    if (rec != gShownRec) {
+        gShownRec = rec;
+        lcd.fillCircle(kW - 92, kHeaderH / 2, 4, rec ? kBad : kHeaderBg);
+    }
     const int state = link().connected() ? 1 : 0;
     if (state != gShownLinkState) {
         gShownLinkState = state;
@@ -130,7 +139,16 @@ void connectStatus(const char* line) { message(line); }
 bool openLink() {
     if (link().connected()) return true;
     gDiscovered = false;
-    if (link().connect(connectStatus)) return true;
+    if (link().connect(connectStatus)) {
+        char desc[128];
+        link().describe(desc, sizeof(desc));
+        for (char* p = desc; *p; ++p) {
+            if (*p == '\n') *p = ',';
+        }
+        storage::event("connected: %s", desc);
+        return true;
+    }
+    storage::event("connect failed: %s", link().lastError());
     const bool elm = settings::get().link == settings::LinkKind::Elm327Wifi;
     message(link().lastError(), elm ? "Dongle plugged in? Ignition on?" : "Ignition on? Wiring?", kWarn);
     return false;
@@ -142,6 +160,7 @@ bool openObd() {
     if (!gDiscovered) {
         message("Querying ECUs...");
         gDiscovered = obd::discover() > 0;
+        storage::event("OBD discovery: %u ECU(s) answering", unsigned(obd::ecuCount()));
     }
     if (!gDiscovered) {
         message("No OBD-II response", "Ignition on? Long-press: back", kWarn);
@@ -292,8 +311,14 @@ void liveEnter() {
     }
     gLivePage = min(gLivePage, livePages() - 1);
     gLiveNext = 0;
+    if (settings::get().recordLive && storage::mounted()) {
+        storage::open(storage::Stream::Live, "time_s,pid,name,value,unit\n");
+        storage::event("live data recording to live.csv");
+    }
     drawLivePage();
 }
+
+void liveLeave() { storage::close(storage::Stream::Live); }
 
 void liveTick() {
     if (!gLiveOk) return;
@@ -312,6 +337,10 @@ void liveTick() {
     const size_t index = first + (gLiveNext++ % onPage);
     float value = 0;
     const bool ok = obd::readPid(*gLive[index], value);
+    if (ok) {
+        storage::printf(storage::Stream::Live, "%.3f,0x%02X,%s,%.*f,%s\n", millis() / 1000.0,
+                        gLive[index]->pid, gLive[index]->name, gLive[index]->decimals, value, gLive[index]->unit);
+    }
     if (ok != gLiveValid[index] || (ok && value != gLiveValue[index])) {
         gLiveValid[index] = ok;
         gLiveValue[index] = value;
@@ -465,6 +494,23 @@ void drawSnifferFooter() {
     lcd.drawString(buf, 4, y + kSnifferFooterH / 2);
 }
 
+// candump log format, which SavvyCAN, python-can and can-utils all read:
+// "(1.234567) can0 7E8#02410C1AF8000000". Time is seconds since power-up.
+void logFrame(const CanFrame& f) {
+    char line[64];
+    const uint32_t us = micros();
+    int n = snprintf(line, sizeof(line), f.extended ? "(%lu.%06lu) can0 %08lX#" : "(%lu.%06lu) can0 %03lX#",
+                     static_cast<unsigned long>(us / 1000000), static_cast<unsigned long>(us % 1000000),
+                     static_cast<unsigned long>(f.id));
+    static const char kHex[] = "0123456789ABCDEF";
+    for (uint8_t i = 0; i < f.dlc && n < int(sizeof(line)) - 3; ++i) {
+        line[n++] = kHex[f.data[i] >> 4];
+        line[n++] = kHex[f.data[i] & 0xF];
+    }
+    line[n++] = '\n';
+    storage::write(storage::Stream::Sniff, line, n);
+}
+
 void snifferNote() { setHeaderNote(gSnifferPaused ? "PAUSED" : link().monitorIsLossless() ? "" : "lossy"); }
 
 void snifferEnter() {
@@ -478,11 +524,16 @@ void snifferEnter() {
     }
     clearBody();
     snifferNote();
+    if (settings::get().recordSniff && storage::mounted()) {
+        storage::open(storage::Stream::Sniff);
+        storage::event("sniffer recording to sniff.log");
+    }
     for (SnifferRow& r : gRows) r = SnifferRow();
     drawSnifferFooter();
 }
 
 void snifferLeave() {
+    storage::close(storage::Stream::Sniff);
     if (gSnifferOk) link().stopMonitor();
     gSnifferOk = false;
 }
@@ -496,8 +547,10 @@ void snifferTick() {
     }
     const uint32_t now = millis();
     CanFrame f;
+    const bool recording = storage::isOpen(storage::Stream::Sniff);
     for (int i = 0; i < kSnifferFramesPerTick && link().readMonitor(f); ++i) {
         ++gSnifferFrames;
+        if (recording) logFrame(f);
         if (!gSnifferPaused) snifferIngest(f, now);
     }
 
@@ -558,6 +611,7 @@ size_t gDtcCount = 0;
 size_t gDtcTop = 0;
 obd::MilStatus gMil;
 bool gDtcOk = false;
+char gDtcSavedAs[24] = "";  // report file from the last read, if saved
 
 void drawDtcList() {
     clearBody();
@@ -576,7 +630,7 @@ void drawDtcList() {
         lcd.drawString("No stored or pending codes", 8, y);
     }
     constexpr int kLineH = 28;
-    const size_t visible = (kH - y - 20) / kLineH;
+    const size_t visible = (kH - y - 40) / kLineH;  // leave room for the footer lines
     for (size_t i = gDtcTop; i < gDtcCount && i < gDtcTop + visible; ++i) {
         const obd::Dtc& d = gDtcs[i];
         lcd.setFont(&fonts::Font4);
@@ -593,7 +647,56 @@ void drawDtcList() {
     lcd.setFont(&fonts::Font2);
     lcd.setTextDatum(textdatum_t::bottom_center);
     lcd.setTextColor(kDim, kBg);
+    if (gDtcSavedAs[0]) {
+        char saved[40];
+        snprintf(saved, sizeof(saved), "Saved %s", gDtcSavedAs);
+        lcd.setTextColor(kGood, kBg);
+        lcd.drawString(saved, kW / 2, kH - 22);
+        lcd.setTextColor(kDim, kBg);
+    }
     lcd.drawString("Press: re-read   Left/hold: back", kW / 2, kH - 4);
+}
+
+// A plain-text record of this read: what was connected, the VIN, the codes.
+void saveScanReport() {
+    String text;
+    text.reserve(1024);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "OBD PDA trouble code scan\nSession %s, %lu s after power-up\n\n",
+             storage::sessionDir(), static_cast<unsigned long>(millis() / 1000));
+    text += buf;
+    char vin[18];
+    snprintf(buf, sizeof(buf), "VIN: %s\n", obd::readVin(vin, sizeof(vin)) ? vin : "not reported");
+    text += buf;
+    char desc[128];
+    link().describe(desc, sizeof(desc));
+    text += "Connection: ";
+    text += desc;
+    text += "\n";
+    const float v = headerVolts();
+    if (v > 0) {
+        snprintf(buf, sizeof(buf), "Battery: %.2f V\n", v);
+        text += buf;
+    }
+    if (gMil.valid) {
+        snprintf(buf, sizeof(buf), "Check engine light: %s (ECUs report %u stored)\n", gMil.milOn ? "ON" : "off",
+                 gMil.storedCount);
+        text += buf;
+    }
+    snprintf(buf, sizeof(buf), "\n%u code(s):\n", unsigned(gDtcCount));
+    text += buf;
+    for (size_t i = 0; i < gDtcCount; ++i) {
+        char ecu[12];
+        ecuLabel(gDtcs[i].ecuId, ecu, sizeof(ecu));
+        text += "  ";
+        text += gDtcs[i].code;
+        text += gDtcs[i].pending ? "  pending  ECU " : "  stored   ECU ";
+        text += ecu;
+        text += "\n";
+    }
+    if (storage::writeReport("scan", text.c_str(), gDtcSavedAs, sizeof(gDtcSavedAs))) {
+        storage::event("saved %s", gDtcSavedAs);
+    }
 }
 
 void readDtcs() {
@@ -603,6 +706,9 @@ void readDtcs() {
     gMil = obd::readMilStatus();
     gDtcCount = obd::readDtcs(gDtcs, kMaxDtcs);
     gDtcTop = 0;
+    storage::event("trouble codes: %u, MIL %s", unsigned(gDtcCount), gMil.milOn ? "on" : "off");
+    gDtcSavedAs[0] = '\0';
+    if (settings::get().saveScans && storage::mounted()) saveScanReport();
     char note[16];
     snprintf(note, sizeof(note), "%u codes", unsigned(gDtcCount));
     setHeaderNote(note);
@@ -682,25 +788,39 @@ void infoEvent(Event ev) {
 // ---- Settings ----
 
 constexpr uint32_t kRateChoices[] = {0, 500000, 250000, 125000};  // 0 = auto
-constexpr uint8_t kBrightChoices[] = {40, 100, 160, 200, 255};
 
-enum SettingItem { kSetLink, kSetWifi, kSetRate, kSetBright, kSetReconnect, kSetCount };
+enum SettingItem {
+    kSetLink,
+    kSetWifi,
+    kSetRate,
+    kSetReconnect,
+    kSetRecSniff,
+    kSetRecLive,
+    kSetSaveScans,
+    kSetSd,
+    kSetCount
+};
 int gSetSel = 0;
-constexpr int kSetRowH = 52;
+constexpr int kSetRowH = 48;
+constexpr int kSetVisible = (kH - kHeaderH - 6) / kSetRowH;
 
 void drawSettings() {
     clearBody();
     const settings::Settings& s = settings::get();
     const bool elm = s.link == settings::LinkKind::Elm327Wifi;
-    static const char* const kLabels[kSetCount] = {"Connection", "Dongle WiFi network", "CAN bitrate (direct)",
-                                                   "Brightness", "Reconnect"};
+    static const char* const kLabels[kSetCount] = {
+        "Connection",       "Dongle WiFi network",  "CAN bitrate (direct)",    "Reconnect",
+        "Record sniffer",   "Record live data",     "Save trouble code scans", "SD card"};
     char value[64];
-    for (int i = 0; i < kSetCount; ++i) {
-        const int y = kHeaderH + 6 + i * kSetRowH;
+    // Scroll so the selected row is always on screen.
+    const int top = gSetSel >= kSetVisible ? gSetSel - kSetVisible + 1 : 0;
+    for (int i = top; i < kSetCount && i < top + kSetVisible; ++i) {
+        const int y = kHeaderH + 6 + (i - top) * kSetRowH;
         const bool sel = i == gSetSel;
         // Settings that don't apply to the current link are greyed out.
+        const bool needsCard = i == kSetRecSniff || i == kSetRecLive || i == kSetSaveScans;
         const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm) ||
-                               (i == kSetLink && !config::kDirectCanAvailable));
+                               (i == kSetLink && !config::kDirectCanAvailable) || (needsCard && !storage::mounted()));
         const uint16_t bg = sel ? kSelectBg : kBg;
         lcd.fillRoundRect(8, y, kW - 16, kSetRowH - 6, 6, bg);
         if (sel) lcd.drawRoundRect(8, y, kW - 16, kSetRowH - 6, 6, kAccent);
@@ -717,8 +837,19 @@ void drawSettings() {
                 snprintf(value, sizeof(value), "%s%s", s.wifiSsid, s.wifiPass[0] ? " (pw set)" : "");
                 break;
             case kSetRate: rateLabel(s.canBitrate, value, sizeof(value)); break;
-            case kSetBright: snprintf(value, sizeof(value), "%u%%", unsigned(s.brightness * 100 / 255)); break;
-            default: strlcpy(value, link().connected() ? "connected - press to redo" : "press SELECT", sizeof(value));
+            case kSetReconnect:
+                strlcpy(value, link().connected() ? "connected - press to redo" : "press to connect", sizeof(value));
+                break;
+            case kSetRecSniff: strlcpy(value, s.recordSniff ? "on: sniff.log (candump)" : "off", sizeof(value)); break;
+            case kSetRecLive: strlcpy(value, s.recordLive ? "on: live.csv" : "off", sizeof(value)); break;
+            case kSetSaveScans: strlcpy(value, s.saveScans ? "on: scan_NN.txt" : "off", sizeof(value)); break;
+            default:
+                if (storage::mounted()) {
+                    snprintf(value, sizeof(value), "%.1f GB free  %s", storage::freeBytes() / 1e9,
+                             storage::sessionDir()[0] ? storage::sessionDir() : "");
+                } else {
+                    strlcpy(value, "no card - press to retry", sizeof(value));
+                }
         }
         lcd.setTextColor(applies ? kFg : kDim, bg);
         lcd.drawString(value, 18, y + 23);
@@ -761,15 +892,14 @@ void settingsEvent(Event ev) {
                 if (s.link == settings::LinkKind::DirectCan) link().disconnect();
                 break;
             }
-            case kSetBright: {
-                constexpr int n = sizeof(kBrightChoices) / sizeof(kBrightChoices[0]);
-                int i = 0;
-                while (i < n - 1 && kBrightChoices[i] < s.brightness) ++i;
-                i = constrain(i + step, 0, n - 1);  // no wrap: dim stays dim
-                s.brightness = kBrightChoices[i];
-                lcd.setBrightness(s.brightness);
+            case kSetRecSniff: s.recordSniff = !s.recordSniff; break;
+            case kSetRecLive: s.recordLive = !s.recordLive; break;
+            case kSetSaveScans: s.saveScans = !s.saveScans; break;
+            case kSetSd:
+                if (step < 0) break;
+                message("Mounting SD card...");
+                storage::event(storage::remount() ? "SD card mounted" : "SD card: no card");
                 break;
-            }
             default:
                 if (step < 0) break;
                 link().disconnect();
@@ -906,7 +1036,7 @@ void wifiEvent(Event ev) {
 
 constexpr ScreenDef kScreens[] = {
     {menuEnter, noop, menuEvent, noop},
-    {liveEnter, liveTick, liveEvent, noop},
+    {liveEnter, liveTick, liveEvent, liveLeave},
     {snifferEnter, snifferTick, snifferEvent, snifferLeave},
     {dtcEnter, noop, dtcEvent, noop},
     {infoEnter, noop, infoEvent, noop},
@@ -928,7 +1058,6 @@ void go(Screen s) {
 void begin() {
     lcd.init();
     lcd.setRotation(0);  // portrait, connector at the top
-    lcd.setBrightness(settings::get().brightness);
     lcd.fillScreen(kBg);
     gRow.setColorDepth(16);
     gRow.createSprite(kW, kSnifferRowH);

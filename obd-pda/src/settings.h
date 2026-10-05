@@ -15,13 +15,16 @@ enum class LinkKind : uint8_t {
 struct Settings {
     LinkKind link;
     uint32_t canBitrate;  // direct CAN only; 0 = auto-detect
-    uint8_t brightness;
     char wifiSsid[33];
     char wifiPass[65];
     // Empty: use the gateway address the dongle's DHCP hands out, which is the
     // dongle itself. Set it only if your dongle does something unusual.
     char elmHost[16];
     uint16_t elmPort;  // 0 = try the usual ports (35000, then 23)
+    // SD card logging.
+    bool recordSniff;  // sniffer frames to sniff.log while the sniffer is open
+    bool recordLive;   // live-data samples to live.csv while live data is open
+    bool saveScans;    // a report file for every trouble-code read
 };
 
 void load();

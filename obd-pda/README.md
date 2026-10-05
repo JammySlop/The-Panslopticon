@@ -1,7 +1,8 @@
 # obd-pda
 
 A pocket OBD-II / CAN bus tool: an ESP32-C3 Super Mini (Tenstar Robot) with a
-2" 240x320 SPI display and a 5-way navigation switch. It talks to the car through a
+2" 240x320 SPI display, a 5-way navigation switch and a micro SD card for
+logs and scan reports. It talks to the car through a
 **generic ELM327 WiFi dongle** (the cheap "WiFi_OBDII" kind) plugged into the
 OBD-II port, so the handheld needs no wiring to the car at all: just USB
 power.
@@ -22,7 +23,7 @@ Settings; see [Direct CAN (optional)](#direct-can-optional).
 | **CAN sniffer** | Every arbitration ID on the bus, sorted, with its latest data, changed bytes highlighted in yellow, and a frames/s rate. SELECT pauses. Through an ELM327 this is `ATMA` and is *lossy* (see below). | **No**: silent monitoring, does not even ACK |
 | **Trouble codes** | Check-engine light state, stored (service 03) and pending (service 07) codes, and which ECU reported each. SELECT re-reads. | Yes: read-only requests |
 | **Vehicle info** | VIN, connection details (ELM version, protocol, dongle IP, WiFi signal), how many ECUs answer, supported PID count, battery voltage at the port. | Yes: read-only requests |
-| **Settings** | Connection type (ELM327 WiFi / direct CAN), dongle WiFi network (scan and pick), CAN bitrate for direct mode, backlight, reconnect. Saved to flash. | No |
+| **Settings** | Connection type (ELM327 WiFi / direct CAN), dongle WiFi network (scan and pick), CAN bitrate for direct mode, reconnect, SD recording on/off, SD card status. Saved to flash. | No |
 
 Nothing here writes to the car: there is no "clear codes" (service 04) yet, on
 purpose. Every request is a standard OBD-II read.
@@ -104,6 +105,7 @@ on release.
 |---|---|
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
 | 2" 240x320 ST7789 SPI display | 8 pins: GND VCC SCL SDA RES DC CS BLK |
+| 6-pin micro SD card module | The common blue "Micro SD Card Adapter" (GND VCC MISO MOSI SCK CS), with its own 3.3 V regulator and level shifter. FAT32 card; 32 GB or smaller is the safe choice. |
 | 5-way tactile switch | A bare 5-way switch (e.g. Alps SKQUCAA010 style) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
 | USB-C power | The car's USB socket or a power bank |
@@ -116,13 +118,13 @@ in the same car that rarely matters; the info screen shows the signal (dBm).
 ```
                  ESP32-C3 Super Mini (USB-C at the top)
                   ┌─────────────┐
-            5V  ──┤             ├── 5    LCD DC
- NAV COM    G   ──┤             ├── 6    LCD SCL (SPI clock)
-            3V3 ──┤             ├── 7    LCD SDA (SPI MOSI)
- NAV UP     4   ──┤             ├── 8    (on-board LED: activity)
+   SD VCC   5V  ──┤             ├── 5    LCD DC
+ NAV COM    G   ──┤             ├── 6    SPI clock: LCD SCL + SD SCK
+ LCD BLK    3V3 ──┤             ├── 7    SPI data:  LCD SDA + SD MOSI
+ NAV UP     4   ──┤             ├── 8    SD CS (on-board LED: card activity)
  NAV DOWN   3   ──┤             ├── 9    (on-board BOOT button: also PUSH)
  NAV LEFT   2   ──┤             ├── 10   LCD CS
- NAV RIGHT  1   ──┤             ├── 20   LCD BLK (backlight PWM)
+ NAV RIGHT  1   ──┤             ├── 20   SD MISO
  NAV PUSH   0   ──┤             ├── 21   LCD RES
                   └─────────────┘
 ```
@@ -142,19 +144,63 @@ continuity mode.
 | 3 | Switch **down** | |
 | 4 | Switch **up** | |
 | 5 | LCD **DC** | |
-| 6 | LCD **SCL** | SPI clock (the "SCL" label is not I2C). |
-| 7 | LCD **SDA** | SPI MOSI. |
-| 8 | On-board LED | Strapping pin, already wired to the LED; flashes on received frames. |
+| 6 | LCD **SCL** and SD **SCK** | Shared SPI clock (the display's "SCL" label is not I2C). |
+| 7 | LCD **SDA** and SD **MOSI** | Shared SPI data out. |
+| 8 | SD **CS** | Strapping pin, idles high. The on-board LED is on this pin too, so it lights while the card is being accessed. |
 | 9 | On-board BOOT button | Strapping pin, already wired to the button; a second push button. |
 | 10 | LCD **CS** | |
-| 20 | LCD **BLK** | UART0 RX; free because serial runs over native USB. PWM dimming. |
+| 20 | SD **MISO** | UART0 RX: an input at boot, so the ROM boot log never drives it against the card. |
 | 21 | LCD **RES** | UART0 TX; the boot ROM log toggles it, which just resets the display before it is initialised. |
 
-Display power: **VCC → 3V3**, **GND → G**. All pins are also in
-[`include/config.h`](include/config.h); change them there.
+Power:
+- Display: **VCC → 3V3**, **GND → G**, and **BLK → 3V3**. The backlight is on
+  whenever the device is, which saves the GPIO that dimming would need. (Most
+  modules also light up with BLK unconnected, through an on-board pull-up.)
+- SD module: **VCC → 5V**, **GND → G**. Its regulator needs 5 V; on 3.3 V it
+  browns out.
 
-This uses every free GPIO, which is why the direct-CAN option below needs the
+All pins are also in [`include/config.h`](include/config.h); change them there.
+
+This uses every GPIO, which is why the direct-CAN option below needs the
 other way of wiring the switch.
+
+## SD card logging
+
+The display and SD card share one SPI bus (clock and MOSI), each with its own
+chip select. Only the card uses MISO. On the common blue modules, the MISO
+level shifter keeps driving the line even when the card isn't selected, so
+it can't share MISO with another device that reads. That's fine here: the
+display never reads.
+
+Files go into a numbered folder per power-up (there's no clock, so no dates).
+The folder is only created once something is written:
+
+```
+/obdpda/0007/
+  events.log     connections, errors, codes read, timestamps since power-up
+  sniff.log      sniffer capture, candump format: (1.234567) can0 7E8#02410C1A
+  live.csv       live-data samples: time_s,pid,name,value,unit
+  scan_01.txt    one report per trouble-code read: VIN, connection, MIL, codes
+```
+
+| Setting | Default | What it does |
+|---|---|---|
+| Record sniffer | off | Writes every frame to `sniff.log` while the sniffer screen is open. A red dot in the header shows it's recording. |
+| Record live data | off | Writes every PID reading to `live.csv` while live data is open. |
+| Save trouble code scans | on | Writes `scan_NN.txt` after every read, and shows the file name on screen. |
+| SD card | | Free space and the session folder; press to remount after swapping cards. |
+
+`events.log` is always written when a card is present. `sniff.log` loads
+directly into SavvyCAN, python-can or can-utils' `canplayer`.
+
+Log data collects in RAM and is flushed to the card every second, so pulling
+the power (or the ignition cutting the car's USB) loses at most about a
+second. If the card is pulled out mid-write, logging stops until it is
+remounted (Settings → SD card, or `sd mount` on the console). `sd` on the
+console shows free space and the session folder.
+
+On direct CAN, the receive queue holds 256 frames, so a busy bus survives the
+occasional slow card write without dropping any.
 
 ## Direct CAN (optional)
 
@@ -280,7 +326,8 @@ platform as `esp32-recon` (Arduino core 3.x) and
 
 ### First power-up checklist
 
-1. USB only, no dongle. The menu should appear. If the colours are inverted,
+1. USB only, no dongle, SD card in. The menu should appear, and the serial
+   console should print `[sd] mounted`. If the colours are inverted,
    flip `kLcdInvert`; if the image is shifted, the module may need an offset
    in `src/display.cpp`.
 2. Switch: up/down move the menu highlight, push (or BOOT) opens, holding
@@ -309,6 +356,7 @@ console. (Untested with this firmware.)
 | `src/obd.*` | OBD-II: ISO-TP reassembly (multi-frame, multiple ECUs, 11/29-bit), PID decoding, DTCs, VIN |
 | `src/settings.*` | Persisted settings (NVS) |
 | `src/console.*` | USB serial console for text settings |
+| `src/storage.*` | SD card: session folders, buffered log streams, scan reports |
 | `src/display.*` | LovyanGFX ST7789 setup |
 | `src/buttons.*` | 5-way switch (digital or ladder): debounce, hold-for-back, auto-repeat |
 | `src/vbat.*` | Battery voltage divider (direct-CAN build) |
@@ -316,7 +364,7 @@ console. (Untested with this firmware.)
 
 ## Roadmap
 
-- [ ] Bench test: display, 5-way switch (both wirings)
+- [ ] Bench test: display, 5-way switch (both wirings), SD card sharing the bus with the display
 - [ ] Car test with an ELM327 WiFi dongle: connect, live data, trouble codes, VIN, sniffer
 - [ ] Car test in direct-CAN mode
 - [ ] K-line / J1850 cars through the ELM (protocols 1-5: different header format, no ISO-TP)
@@ -325,5 +373,5 @@ console. (Untested with this firmware.)
 - [ ] Clear codes (service 04), behind a confirmation screen
 - [ ] Sleep (and drop WiFi) when the battery voltage says the engine has been off for a while
 - [ ] Stream sniffed frames over USB in a SavvyCAN-compatible format (GVRET)
-- [ ] Log to SD card, or to the C3's flash
+- [ ] Browse and replay saved logs on the device
 - [ ] Graphs for live PIDs
