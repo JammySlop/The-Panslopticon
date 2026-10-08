@@ -106,7 +106,7 @@ on release.
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
 | 2" 240x320 ST7789 SPI display | 8 pins: GND VCC SCL SDA RES DC CS BLK |
 | 6-pin micro SD card module | The common blue "Micro SD Card Adapter" (GND VCC MISO MOSI SCK CS), with its own 3.3 V regulator and level shifter. FAT32 card; 32 GB or smaller is the safe choice. |
-| 5-way tactile switch | A bare 5-way switch (e.g. Alps SKQUCAA010 style) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
+| 5-way tactile switch | A bare 6-pin 5-way navigation switch (3 pins per side; see [its pinout](#the-5-way-switch-bare-6-pins)) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
 | USB-C power | The car's USB socket or a power bank |
 
@@ -132,9 +132,68 @@ in the same car that rarely matters; the info screen shows the signal (dBm).
 The switch's five contacts and common line run straight down the left header:
 common to **G**, then up/down/left/right/push to **GPIO 4, 3, 2, 1, 0**. Each
 contact just shorts its pin to ground; the C3's internal pull-ups do the rest,
-so no other parts are needed. Most module boards label the pins `COM UP DWN
-LFT RHT MID`; on a bare switch, find which pin is common with a multimeter in
-continuity mode.
+so no other parts are needed. Module boards usually label their pins `COM UP
+DWN LFT RHT MID`; for a bare 6-pin switch, see below.
+
+### The 5-way switch (bare, 6 pins)
+
+A bare 5-way navigation switch has 6 pins, 3 on each of two opposite sides:
+one **common**, one **push** (centre), and one per **direction**. On most
+generic and Alps SKRH-style parts the middle pins are common and push, and
+the four corners are the directions:
+
+```
+   Looking down on the switch, pins on the left and right sides
+
+               ┌─────────────────────┐
+    corner A ──┤                     ├── corner B
+               │          ▲          │
+    COMMON   ──┤      ◄   ●   ►      ├── PUSH (centre)
+               │          ▼          │
+    corner C ──┤                     ├── corner D
+               └─────────────────────┘
+```
+
+That layout isn't universal, and which corner is "up" depends on how the
+switch sits in your case, so **check yours with a multimeter** in continuity
+(beep) mode before wiring:
+
+1. **Find common.** It's the one pin that beeps against a *different* pin for
+   each of the five actions. Hold one probe on a middle pin and try every
+   action; if it beeps once for each, that's common.
+2. **Find push.** Press the stem straight down: the pin that now beeps
+   against common is push.
+3. **Map the directions.** Mount (or hold) the switch the way it'll sit
+   under the screen, then push up, down, left and right in turn and note
+   which corner beeps each time.
+4. If two pins beep together with nothing pressed, they're joined inside
+   (some switches double up common). Treat them as one pin.
+
+Write the result on a sticky note, then wire it:
+
+```
+   5-way switch                      ESP32-C3 Super Mini (left header)
+
+   COMMON ─────────────────────────── G
+   UP    (the corner you found) ───── GPIO4
+   DOWN  (the corner you found) ───── GPIO3
+   LEFT  (the corner you found) ───── GPIO2
+   RIGHT (the corner you found) ───── GPIO1
+   PUSH  ──────────────────────────── GPIO0
+```
+
+No resistors or capacitors needed: the firmware enables the internal
+pull-ups and debounces in software.
+
+If a direction turns out swapped after it's soldered, don't rewire: swap the
+GPIO numbers in `kPinNavUp/Down/Left/Right` in `include/config.h` and
+reflash. To check, type `nav` on the serial console while holding a
+direction; it prints which key the firmware thinks is held.
+
+For the ladder build (direct CAN), the same switch wires as shown in
+[5-way switch on a resistor ladder](#5-way-switch-on-a-resistor-ladder):
+common to the GPIO4 node, each direction and push to ground through its
+resistor.
 
 | GPIO | Connects to | Why this pin |
 |---|---|---|
@@ -225,16 +284,21 @@ on the CAN pins.
 
 ```
  3V3 ──[10k]──┬──────────────► GPIO4 (ADC)
-              ├── PUSH  ─────────────── G        0 V
-              ├── UP    ──[1k]───────── G     0.30 V
-              ├── DOWN  ──[3.3k]─────── G     0.82 V
-              ├── LEFT  ──[6.8k]─────── G     1.34 V
-              └── RIGHT ──[15k]──────── G     1.98 V
-                                   (released: 3.3 V)
+              │
+           COMMON  (switch pin)
+              │
+              ├── PUSH  pin ─────────────── G        0 V
+              ├── UP    pin ──[1k]───────── G     0.30 V
+              ├── DOWN  pin ──[3.3k]─────── G     0.82 V
+              ├── LEFT  pin ──[6.8k]─────── G     1.34 V
+              └── RIGHT pin ──[15k]──────── G     1.98 V
+                                       (released: 3.3 V)
 ```
 
-The switch's common goes to the GPIO4 node, and each direction goes to ground
-through its own resistor. Use 1% resistors. The voltages are calculated, not
+The switch's common pin goes to the GPIO4 node, and each direction pin goes to
+ground through its own resistor; pressing a direction connects common to that
+pin. Identify the pins first, as in [The 5-way switch](#the-5-way-switch-bare-6-pins).
+Use 1% resistors. The voltages are calculated, not
 measured; hold each direction and type `nav` on the serial console to see the
 reading, then adjust `kNavLadderThresholdsMv` in `config.h` if a direction
 lands in the wrong band. A ladder can only report one direction at a time,
