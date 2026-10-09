@@ -138,49 +138,53 @@ DWN LFT RHT MID`; for a bare 6-pin switch, see below.
 ### The 5-way switch (bare, 6 pins)
 
 A bare 5-way navigation switch has 6 pins, 3 on each of two opposite sides:
-one **common**, one **push** (centre), and one per **direction**. On most
-generic and Alps SKRH-style parts the middle pins are common and push, and
-the four corners are the directions:
+one **common**, one **push** (centre), and one per **direction**. Which pin
+is which varies between parts. This is the switch this build was mapped on,
+checked with a multimeter and mounted the way it sits under the screen:
 
 ```
    Looking down on the switch, pins on the left and right sides
 
-               ┌─────────────────────┐
-    corner A ──┤                     ├── corner B
-               │          ▲          │
-    COMMON   ──┤      ◄   ●   ►      ├── PUSH (centre)
-               │          ▼          │
-    corner C ──┤                     ├── corner D
-               └─────────────────────┘
+                 ┌─────────────────────┐
+   A  COMMON  ───┤                     ├─── B  LEFT
+                 │          ▲          │
+   (mid) DOWN ───┤      ◄   ●   ►      ├─── (mid) UP
+                 │          ▼          │
+   C  PUSH    ───┤                     ├─── D  RIGHT
+                 └─────────────────────┘
+
+   Corner A is common: A + mid-left = down, A + C = push (centre click),
+   A + D = right, A + mid-right = up, A + B = left.
 ```
 
-That layout isn't universal, and which corner is "up" depends on how the
-switch sits in your case, so **check yours with a multimeter** in continuity
-(beep) mode before wiring:
+Wire it like this:
+
+```
+   5-way switch                       ESP32-C3 Super Mini (left header)
+
+   A          COMMON ──────────────── G
+   mid-right  UP     ──────────────── GPIO4
+   mid-left   DOWN   ──────────────── GPIO3
+   B          LEFT   ──────────────── GPIO2
+   D          RIGHT  ──────────────── GPIO1
+   C          PUSH   ──────────────── GPIO0
+```
+
+**Using a different switch, or mounting it rotated?** Check it with a
+multimeter in continuity (beep) mode first:
 
 1. **Find common.** It's the one pin that beeps against a *different* pin for
-   each of the five actions. Hold one probe on a middle pin and try every
-   action; if it beeps once for each, that's common.
+   each of the five actions (on the switch above, corner A).
 2. **Find push.** Press the stem straight down: the pin that now beeps
    against common is push.
-3. **Map the directions.** Mount (or hold) the switch the way it'll sit
-   under the screen, then push up, down, left and right in turn and note
-   which corner beeps each time.
+3. **Map the directions.** Hold the switch the way it'll sit under the
+   screen, push up, down, left and right in turn, and note which pin beeps
+   each time.
 4. If two pins beep together with nothing pressed, they're joined inside
    (some switches double up common). Treat them as one pin.
 
-Write the result on a sticky note, then wire it:
-
-```
-   5-way switch                      ESP32-C3 Super Mini (left header)
-
-   COMMON ─────────────────────────── G
-   UP    (the corner you found) ───── GPIO4
-   DOWN  (the corner you found) ───── GPIO3
-   LEFT  (the corner you found) ───── GPIO2
-   RIGHT (the corner you found) ───── GPIO1
-   PUSH  ──────────────────────────── GPIO0
-```
+Then wire common to **G** and each function to its GPIO as in the table
+above, whichever physical pin it turns out to be.
 
 No resistors or capacitors needed: the firmware enables the internal
 pull-ups and debounces in software.
@@ -192,8 +196,8 @@ direction; it prints which key the firmware thinks is held.
 
 For the ladder build (direct CAN), the same switch wires as shown in
 [5-way switch on a resistor ladder](#5-way-switch-on-a-resistor-ladder):
-common to the GPIO4 node, each direction and push to ground through its
-resistor.
+common (A) to the GPIO4 node, and each direction and push to ground
+through its resistor.
 
 | GPIO | Connects to | Why this pin |
 |---|---|---|
@@ -285,13 +289,13 @@ on the CAN pins.
 ```
  3V3 ──[10k]──┬──────────────► GPIO4 (ADC)
               │
-           COMMON  (switch pin)
+           COMMON  (switch pin A)
               │
-              ├── PUSH  pin ─────────────── G        0 V
-              ├── UP    pin ──[1k]───────── G     0.30 V
-              ├── DOWN  pin ──[3.3k]─────── G     0.82 V
-              ├── LEFT  pin ──[6.8k]─────── G     1.34 V
-              └── RIGHT pin ──[15k]──────── G     1.98 V
+              ├── PUSH  (C)         ─────────────── G        0 V
+              ├── UP    (mid-right) ──[1k]───────── G     0.30 V
+              ├── DOWN  (mid-left)  ──[3.3k]─────── G     0.82 V
+              ├── LEFT  (B)         ──[6.8k]─────── G     1.34 V
+              └── RIGHT (D)         ──[15k]──────── G     1.98 V
                                        (released: 3.3 V)
 ```
 
