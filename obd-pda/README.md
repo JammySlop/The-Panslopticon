@@ -105,7 +105,7 @@ on release.
 |---|---|
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
 | 2" 240x320 ST7789 SPI display | 8 pins: GND VCC SCL SDA RES DC CS BLK |
-| 6-pin micro SD card module | The common blue "Micro SD Card Adapter" (GND VCC MISO MOSI SCK CS), with its own 3.3 V regulator and level shifter. FAT32 card; 32 GB or smaller is the safe choice. |
+| 6-pin micro SD card module | 3.3 V module (GND VCC MISO MOSI SCK CS). FAT32 card; 32 GB or smaller is the safe choice. If yours is the blue kind with an AMS1117 regulator on it, it needs 5 V instead (see Power below). |
 | 5-way tactile switch | A bare 6-pin 5-way navigation switch (3 pins per side; see [its pinout](#the-5-way-switch-bare-6-pins)) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
 | USB-C power | The car's USB socket or a power bank |
@@ -118,15 +118,18 @@ in the same car that rarely matters; the info screen shows the signal (dBm).
 ```
                  ESP32-C3 Super Mini (USB-C at the top)
                   ┌─────────────┐
-   SD VCC   5V  ──┤             ├── 5    LCD DC
+            5V  ──┤             ├── 5    LCD DC
  NAV COM    G   ──┤             ├── 6    SPI clock: LCD SCL + SD SCK
- LCD BLK    3V3 ──┤             ├── 7    SPI data:  LCD SDA + SD MOSI
+ POWER *    3V3 ──┤             ├── 7    SPI data:  LCD SDA + SD MOSI
  NAV UP     4   ──┤             ├── 8    SD CS (on-board LED: card activity)
  NAV DOWN   3   ──┤             ├── 9    (on-board BOOT button: also PUSH)
  NAV LEFT   2   ──┤             ├── 10   LCD CS
  NAV RIGHT  1   ──┤             ├── 20   SD MISO
  NAV PUSH   0   ──┤             ├── 21   LCD RES
                   └─────────────┘
+
+ * 3V3 feeds the display (VCC and BLK) and the SD module (VCC).
+   G is the ground for the switch, the display and the SD module.
 ```
 
 The switch's five contacts and common line run straight down the left header:
@@ -219,8 +222,11 @@ Power:
 - Display: **VCC → 3V3**, **GND → G**, and **BLK → 3V3**. The backlight is on
   whenever the device is, which saves the GPIO that dimming would need. (Most
   modules also light up with BLK unconnected, through an on-board pull-up.)
-- SD module: **VCC → 5V**, **GND → G**. Its regulator needs 5 V; on 3.3 V it
-  browns out.
+- SD module: **VCC → 3V3**, **GND → G**. A 10-47 µF capacitor across the
+  module's VCC and GND helps: cards draw current in short bursts when
+  writing, and the 3V3 rail also feeds WiFi. (The blue modules with an
+  AMS1117 regulator on board are the exception: those need **VCC → 5V**, and
+  brown out on 3.3 V.)
 
 All pins are also in [`include/config.h`](include/config.h); change them there.
 
@@ -230,9 +236,9 @@ other way of wiring the switch.
 ## SD card logging
 
 The display and SD card share one SPI bus (clock and MOSI), each with its own
-chip select. Only the card uses MISO. On the common blue modules, the MISO
-level shifter keeps driving the line even when the card isn't selected, so
-it can't share MISO with another device that reads. That's fine here: the
+chip select. Only the card uses MISO. Some SD modules (the blue ones with a level
+shifter) keep driving MISO even when the card isn't selected, so they can't
+share MISO with another device that reads. That's fine here either way: the
 display never reads.
 
 Files go into a numbered folder per power-up (there's no clock, so no dates).

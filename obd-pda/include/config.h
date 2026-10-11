@@ -36,8 +36,8 @@ constexpr int kPinLcdRst = 21;
 // 6-pin micro SD module (GND VCC MISO MOSI SCK CS). GPIO8 also drives the
 // board's blue LED (active low), so the LED lights while the card is accessed.
 constexpr int kPinSdCs = 8;
-// 20 MHz is safe through the level shifter on the common blue modules; the
-// card itself does 25.
+// 20 MHz leaves margin for jumper wires (and for modules with a level
+// shifter); the card itself does 25.
 constexpr uint32_t kSdSpiHz = 20000000;
 
 // --- 5-way navigation switch ---------------------------------------------------
