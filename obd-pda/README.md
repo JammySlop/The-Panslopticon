@@ -1,7 +1,7 @@
 # obd-pda
 
 A pocket OBD-II / CAN bus tool: an ESP32-C3 Super Mini (Tenstar Robot) with a
-2" 240x320 SPI display, a 5-way navigation switch and a micro SD card for
+3.5" 240x320 ILI9341 SPI display, a 5-way navigation switch and a micro SD card for
 logs and scan reports. It talks to the car through a
 **generic ELM327 WiFi dongle** (the cheap "WiFi_OBDII" kind) plugged into the
 OBD-II port, so the handheld needs no wiring to the car at all: just USB
@@ -104,7 +104,7 @@ on release.
 | Part | Notes |
 |---|---|
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
-| 2" 240x320 ST7789 SPI display | 8 pins: GND VCC SCL SDA RES DC CS BLK |
+| 3.5" 240x320 ILI9341 SPI display | Pins: VCC GND CS RESET DC SDI SCK LED SDO, plus T_* touch pins. Only the first eight are used; leave SDO and the touch pins unconnected. Ignore the module's own SD slot too: logging uses the separate SD module. |
 | 6-pin micro SD card module | 3.3 V module (GND VCC MISO MOSI SCK CS). FAT32 card; 32 GB or smaller is the safe choice. If yours is the blue kind with an AMS1117 regulator on it, it needs 5 V instead (see Power below). |
 | 5-way tactile switch | A bare 6-pin 5-way navigation switch (3 pins per side; see [its pinout](#the-5-way-switch-bare-6-pins)) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
@@ -119,16 +119,16 @@ in the same car that rarely matters; the info screen shows the signal (dBm).
                  ESP32-C3 Super Mini (USB-C at the top)
                   ┌─────────────┐
             5V  ──┤             ├── 5    LCD DC
- NAV COM    G   ──┤             ├── 6    SPI clock: LCD SCL + SD SCK
- POWER *    3V3 ──┤             ├── 7    SPI data:  LCD SDA + SD MOSI
+ NAV COM    G   ──┤             ├── 6    SPI clock: LCD SCK + SD SCK
+ POWER *    3V3 ──┤             ├── 7    SPI data:  LCD SDI + SD MOSI
  NAV UP     4   ──┤             ├── 8    SD CS (on-board LED: card activity)
  NAV DOWN   3   ──┤             ├── 9    (on-board BOOT button: also PUSH)
  NAV LEFT   2   ──┤             ├── 10   LCD CS
  NAV RIGHT  1   ──┤             ├── 20   SD MISO
- NAV PUSH   0   ──┤             ├── 21   LCD RES
+ NAV PUSH   0   ──┤             ├── 21   LCD RESET
                   └─────────────┘
 
- * 3V3 feeds the display (VCC and BLK) and the SD module (VCC).
+ * 3V3 feeds the display (VCC and LED) and the SD module (VCC).
    G is the ground for the switch, the display and the SD module.
 ```
 
@@ -210,18 +210,22 @@ through its resistor.
 | 3 | Switch **down** | |
 | 4 | Switch **up** | |
 | 5 | LCD **DC** | |
-| 6 | LCD **SCL** and SD **SCK** | Shared SPI clock (the display's "SCL" label is not I2C). |
-| 7 | LCD **SDA** and SD **MOSI** | Shared SPI data out. |
+| 6 | LCD **SCK** and SD **SCK** | Shared SPI clock. |
+| 7 | LCD **SDI** and SD **MOSI** | Shared SPI data out. |
 | 8 | SD **CS** | Strapping pin, idles high. The on-board LED is on this pin too, so it lights while the card is being accessed. |
 | 9 | On-board BOOT button | Strapping pin, already wired to the button; a second push button. |
 | 10 | LCD **CS** | |
 | 20 | SD **MISO** | UART0 RX: an input at boot, so the ROM boot log never drives it against the card. |
-| 21 | LCD **RES** | UART0 TX; the boot ROM log toggles it, which just resets the display before it is initialised. |
+| 21 | LCD **RESET** | UART0 TX; the boot ROM log toggles it, which just resets the display before it is initialised. |
 
 Power:
-- Display: **VCC → 3V3**, **GND → G**, and **BLK → 3V3**. The backlight is on
-  whenever the device is, which saves the GPIO that dimming would need. (Most
-  modules also light up with BLK unconnected, through an on-board pull-up.)
+- Display: **VCC → 3V3**, **GND → G**, and **LED → 3V3**. The backlight is on
+  whenever the device is, which saves the GPIO that dimming would need. A
+  3.5" backlight draws more than the old 2" one (tens of mA), all from the
+  C3's 3V3 regulator alongside WiFi and the SD card. If the board browns out
+  or resets when WiFi connects, check whether the module has a regulator
+  (the red boards marked J1 usually do) and, if so, feed its VCC from **5V**
+  instead; the logic pins stay 3.3 V either way.
 - SD module: **VCC → 3V3**, **GND → G**. A 10-47 µF capacitor across the
   module's VCC and GND helps: cards draw current in short bursts when
   writing, and the 3V3 rail also feeds WiFi. (The blue modules with an
@@ -431,7 +435,7 @@ console. (Untested with this firmware.)
 | `src/settings.*` | Persisted settings (NVS) |
 | `src/console.*` | USB serial console for text settings |
 | `src/storage.*` | SD card: session folders, buffered log streams, scan reports |
-| `src/display.*` | LovyanGFX ST7789 setup |
+| `src/display.*` | LovyanGFX ILI9341 setup |
 | `src/buttons.*` | 5-way switch (digital or ladder): debounce, hold-for-back, auto-repeat |
 | `src/vbat.*` | Battery voltage divider (direct-CAN build) |
 | `src/ui.*` | Screens and navigation |

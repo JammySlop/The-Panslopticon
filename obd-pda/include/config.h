@@ -17,20 +17,22 @@ namespace config {
 // pin the wrong way at reset (just don't hold LEFT while powering on).
 
 // One SPI bus, shared by the display and the micro SD card.
-// SCL/SDA on the display module are the SPI clock and MOSI, not I2C.
+// SCK/SDI on the display module are the SPI clock and MOSI.
 constexpr int kPinSpiSclk = 6;
 constexpr int kPinSpiMosi = 7;
 // Only the SD card talks back. GPIO20 is UART0 RX, an input at boot, so the
-// ROM boot log never drives it against the card.
+// ROM boot log never drives it against the card. The display's SDO (MISO)
+// stays unconnected: the firmware never reads the panel.
 constexpr int kPinSpiMiso = 20;
 
-// 2" 240x320 ST7789 display (silkscreen: GND VCC SCL SDA RES DC CS BLK).
+// 3.5" 240x320 ILI9341 display (silkscreen: VCC GND CS RESET DC SDI SCK LED
+// SDO, plus T_* touch pins, which stay unconnected).
 constexpr int kPinLcdCs = 10;
 constexpr int kPinLcdDc = 5;
 // GPIO21 is UART0 TX, so the ROM boot log wiggles it for a moment at power-on.
 // That only resets the display, which setup() initialises afterwards anyway.
 constexpr int kPinLcdRst = 21;
-// BLK is wired to 3V3: the backlight is on whenever the device is, which
+// LED is wired to 3V3: the backlight is on whenever the device is, which
 // frees the GPIO that dimming would need.
 
 // 6-pin micro SD module (GND VCC MISO MOSI SCK CS). GPIO8 also drives the
@@ -99,8 +101,9 @@ constexpr float kVbatCalibration = 1.0f;
 
 // --- Display -----------------------------------------------------------------
 constexpr uint32_t kLcdSpiHz = 40000000;  // 80 MHz often works too; 40 is safe.
-// Most 2" ST7789 modules need colour inversion; flip this if colours look wrong.
-constexpr bool kLcdInvert = true;
+// ILI9341 modules normally need no colour inversion; flip this if colours look
+// wrong (white background, black text).
+constexpr bool kLcdInvert = false;
 
 // --- CAN / OBD-II -----------------------------------------------------------
 // OBD-II over CAN (ISO 15765-4) runs at 500 kbit/s on almost every car since

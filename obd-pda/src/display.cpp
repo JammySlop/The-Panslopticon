@@ -42,6 +42,6 @@ Display::Display() {
         cfg.bus_shared = true;
         panel_.config(cfg);
     }
-    // No backlight control: BLK is wired to 3V3.
+    // No backlight control: LED is wired to 3V3.
     setPanel(&panel_);
 }

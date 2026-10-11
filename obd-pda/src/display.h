@@ -1,4 +1,4 @@
-// LovyanGFX driver for the 2" 240x320 ST7789 SPI module.
+// LovyanGFX driver for the 3.5" 240x320 ILI9341 SPI module.
 #pragma once
 
 #define LGFX_USE_V1
@@ -9,7 +9,7 @@ public:
     Display();
 
 private:
-    lgfx::Panel_ST7789 panel_;
+    lgfx::Panel_ILI9341 panel_;
     lgfx::Bus_SPI bus_;
 };
 
