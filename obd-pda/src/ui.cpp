@@ -1057,6 +1057,7 @@ void go(Screen s) {
 
 void begin() {
     lcd.init();
+    if (!lcd.dcOk()) Serial.println("[lcd] DC inversion did not take: the panel will stay blank");
     lcd.setRotation(0);  // portrait, connector at the top
     lcd.fillScreen(kBg);
     gRow.setColorDepth(16);

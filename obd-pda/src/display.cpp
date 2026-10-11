@@ -1,8 +1,35 @@
 #include "display.h"
 
+#include <driver/gpio.h>
+#include <esp_rom_gpio.h>
+#include <soc/gpio_sig_map.h>
+
 #include "config.h"
 
 Display lcd;
+
+bool InvertedDcBus::init() {
+    const bool ok = Bus_SPI::init();
+    if (config::kLcdDcInverted) {
+        invertDc();
+        // Bus_SPI::init() leaves DC driven high (data). Through the inverter
+        // the pad must now read low; LovyanGFX keeps the pad's input enabled.
+        dcInverted_ = gpio_get_level(static_cast<gpio_num_t>(config::kPinLcdDc)) == 0;
+    }
+    return ok;
+}
+
+void InvertedDcBus::beginTransaction() {
+    Bus_SPI::beginTransaction();
+    if (config::kLcdDcInverted) invertDc();
+}
+
+void InvertedDcBus::invertDc() {
+    // Plain GPIO output (not a peripheral signal), with the output inverted.
+    esp_rom_gpio_connect_out_signal(config::kPinLcdDc, SIG_GPIO_OUT_IDX, true, false);
+}
+
+bool Display::dcOk() const { return !config::kLcdDcInverted || bus_.dcInverted(); }
 
 Display::Display() {
     {

@@ -104,7 +104,7 @@ on release.
 | Part | Notes |
 |---|---|
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
-| 3.5" 240x320 ILI9341 SPI display | Pins: VCC GND CS RESET DC SDI SCK LED SDO, plus T_* touch pins. Only the first eight are used; leave SDO and the touch pins unconnected. Ignore the module's own SD slot too: logging uses the separate SD module. |
+| 3.5" 240x320 ILI9341 SPI display | Pins: VCC GND CS RESET DC SDI SCK LED SDO, plus T_* touch pins. Only the first eight are used; leave SDO and the touch pins unconnected. Ignore the module's own SD slot too: logging uses the separate SD module. Its DC line is inverted (high = command); the firmware compensates (`kLcdDcInverted`). |
 | 6-pin micro SD card module | 3.3 V module (GND VCC MISO MOSI SCK CS). FAT32 card; 32 GB or smaller is the safe choice. If yours is the blue kind with an AMS1117 regulator on it, it needs 5 V instead (see Power below). |
 | 5-way tactile switch | A bare 6-pin 5-way navigation switch (3 pins per side; see [its pinout](#the-5-way-switch-bare-6-pins)) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
