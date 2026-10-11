@@ -104,10 +104,11 @@ constexpr uint32_t kLcdSpiHz = 40000000;  // 80 MHz often works too; 40 is safe.
 // ILI9341 modules normally need no colour inversion; flip this if colours look
 // wrong (white background, black text).
 constexpr bool kLcdInvert = false;
-// This module's DC line is active-high for commands, the reverse of a stock
-// ILI9341. The firmware inverts the pin in the GPIO matrix (see display.h);
-// set false for a module with normal DC.
-constexpr bool kLcdDcInverted = true;
+// Set true only for a module whose DC line is active-high for commands, the
+// reverse of a stock ILI9341; the firmware then inverts the pin in the GPIO
+// matrix (see display.h). The bench module turned out to be normal: with this
+// true the panel stays white.
+constexpr bool kLcdDcInverted = false;
 
 // --- CAN / OBD-II -----------------------------------------------------------
 // OBD-II over CAN (ISO 15765-4) runs at 500 kbit/s on almost every car since
