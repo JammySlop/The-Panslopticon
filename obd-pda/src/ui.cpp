@@ -356,7 +356,7 @@ void liveEvent(Event ev) {
     if (livePages() <= 1) return;
     if (ev == Event::Down || ev == Event::Right || ev == Event::Select) {
         gLivePage = (gLivePage + 1) % livePages();
-    } else if (ev == Event::Up || ev == Event::Left) {
+    } else if (ev == Event::Up) {
         gLivePage = (gLivePage + livePages() - 1) % livePages();
     }
     else return;
@@ -593,8 +593,7 @@ void snifferEvent(Event ev) {
     const size_t maxTop = gEntryCount > size_t(kSnifferRows) ? gEntryCount - kSnifferRows : 0;
     if (ev == Event::Up && gSnifferTop > 0) --gSnifferTop;
     if (ev == Event::Down && gSnifferTop < maxTop) ++gSnifferTop;
-    // Left/right jump a screenful.
-    if (ev == Event::Left) gSnifferTop = gSnifferTop > size_t(kSnifferRows) ? gSnifferTop - kSnifferRows : 0;
+    // Right jumps a screenful down (left is back).
     if (ev == Event::Right) gSnifferTop = min(gSnifferTop + kSnifferRows, maxTop);
     if (ev == Event::Select) {
         gSnifferPaused = !gSnifferPaused;
@@ -654,7 +653,7 @@ void drawDtcList() {
         lcd.drawString(saved, kW / 2, kH - 22);
         lcd.setTextColor(kDim, kBg);
     }
-    lcd.drawString("Press: re-read   Left/hold: back", kW / 2, kH - 4);
+    lcd.drawString("Press: re-read   Left: back", kW / 2, kH - 4);
 }
 
 // A plain-text record of this read: what was connected, the VIN, the codes.
@@ -863,13 +862,12 @@ void settingsEnter() {
     drawSettings();
 }
 
-// Left/right step a value back/forward; press does the same as right.
+// Right or press steps a value forward, wrapping round (left is back).
 void settingsEvent(Event ev) {
     settings::Settings& s = settings::get();
     if (ev == Event::Up) gSetSel = (gSetSel + kSetCount - 1) % kSetCount;
     if (ev == Event::Down) gSetSel = (gSetSel + 1) % kSetCount;
-    const int step = ev == Event::Left ? -1 : (ev == Event::Right || ev == Event::Select) ? 1 : 0;
-    if (step != 0) {
+    if (ev == Event::Right || ev == Event::Select) {
         switch (gSetSel) {
             case kSetLink:
                 if (!config::kDirectCanAvailable) break;  // only one choice
@@ -879,7 +877,7 @@ void settingsEvent(Event ev) {
                 gDiscovered = false;
                 break;
             case kSetWifi:
-                if (step > 0 && s.link == settings::LinkKind::Elm327Wifi) {
+                if (s.link == settings::LinkKind::Elm327Wifi) {
                     go(Screen::WifiPick);
                     return;
                 }
@@ -888,7 +886,7 @@ void settingsEvent(Event ev) {
                 constexpr size_t n = sizeof(kRateChoices) / sizeof(kRateChoices[0]);
                 size_t i = 0;
                 while (i < n && kRateChoices[i] != s.canBitrate) ++i;
-                s.canBitrate = kRateChoices[(i + n + step) % n];
+                s.canBitrate = kRateChoices[(i + 1) % n];
                 if (s.link == settings::LinkKind::DirectCan) link().disconnect();
                 break;
             }
@@ -896,12 +894,10 @@ void settingsEvent(Event ev) {
             case kSetRecLive: s.recordLive = !s.recordLive; break;
             case kSetSaveScans: s.saveScans = !s.saveScans; break;
             case kSetSd:
-                if (step < 0) break;
                 message("Mounting SD card...");
                 storage::event(storage::remount() ? "SD card mounted" : "SD card: no card");
                 break;
             default:
-                if (step < 0) break;
                 link().disconnect();
                 if (openLink()) {
                     message("Connected", link().shortName(), kGood);
@@ -970,7 +966,7 @@ void drawNetworks() {
     }
     lcd.setTextDatum(textdatum_t::bottom_center);
     lcd.setTextColor(kDim, kBg);
-    lcd.drawString("Press: use   Left/hold: back", kW / 2, kH - 4);
+    lcd.drawString("Press: use   Left: back", kW / 2, kH - 4);
 }
 
 void scanNetworks() {
@@ -1069,9 +1065,9 @@ void begin() {
 
 void loop() {
     const Event ev = buttons::poll();
-    // Screens that have no sideways action treat LEFT as back.
-    const bool leftIsBack = gScreen == Screen::Dtc || gScreen == Screen::Info || gScreen == Screen::WifiPick;
-    const Event action = (ev == Event::Left && leftIsBack) ? Event::Back : ev;
+    // LEFT is back on every screen, so there is always a one-tap way out;
+    // holding the push is a second one.
+    const Event action = ev == Event::Left ? Event::Back : ev;
     if (action == Event::Back && gScreen == Screen::WifiPick) {
         go(Screen::Settings);
     } else if (action == Event::Back && gScreen != Screen::Menu) {

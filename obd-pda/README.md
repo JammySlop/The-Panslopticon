@@ -89,10 +89,14 @@ board's BOOT button also works as the push.
 | Input | Menus and lists | Live data | Sniffer | Settings |
 |---|---|---|---|---|
 | Up / down | Move | Previous / next page | Scroll a row | Move |
-| Left | Back (trouble codes, info, WiFi list) | Previous page | Up a screenful | Previous value |
+| **Left** | **Back** | **Back** | **Back** | **Back** |
 | Right | Open (main menu) | Next page | Down a screenful | Next value / open |
 | Push | Open / do it | Next page | Pause | Next value / open |
-| Hold push (0.6 s) | Back to the menu | ← | ← | ← |
+| Hold push (0.6 s) | Back | ← | ← | ← |
+
+**Left is always back**, one tap on every screen: to the main menu, or from
+the WiFi list to Settings. Holding the push is a second way back. Settings
+values step forward only and wrap round.
 
 Directions auto-repeat when held. A held push becomes Back, so the push acts
 on release.
