@@ -411,9 +411,17 @@ platform as `esp32-recon` (Arduino core 3.x) and
 1. USB only, no dongle, SD card in. The menu should appear, and the serial
    console should print `[sd] mounted`. If the colours are inverted,
    flip `kLcdInvert`; if the image is shifted, the module may need an offset
-   in `src/display.cpp`.
-2. Switch: up/down move the menu highlight, push (or BOOT) opens, holding
-   push goes back. If a direction does the wrong thing, type `nav` on the
+   in `src/display.cpp`. If the screen stays white, the panel is ignoring its
+   init commands: check the wiring, and that `kLcdDcInverted` is false unless
+   the module really has an inverted DC line.
+   If the console prints `Card Failed! cmd: 0x37` / `0x29` and `[sd] no card`,
+   the card answered at first, then browned out while powering up. Measure
+   the 3.3V pin *at the SD module*. On the bench build a bad breadboard and
+   jumper path dropped it to 2.5 V (cards need 2.7 V or more) while the C3's
+   3V3 pin still read 3.3 V. Shorten or solder the power and ground wires
+   until the module reads about 3.3 V. Reformatting the card won't help.
+2. Switch: up/down move the menu highlight, push (or BOOT) opens, left (or
+   holding push) goes back. If a direction does the wrong thing, type `nav` on the
    serial console while holding it to see which key the firmware thinks it is.
 3. Dongle in the car, ignition on. **Settings → Dongle WiFi network**: the
    dongle's network should be listed in cyan near the top. Pick it.
