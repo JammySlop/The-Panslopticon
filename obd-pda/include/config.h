@@ -13,10 +13,9 @@ namespace config {
 //
 // Strapping pins are GPIO2, GPIO8 and GPIO9. GPIO9 is the on-board BOOT
 // button, GPIO8 (on-board LED) is the SD card's chip select, which idles high,
-// and GPIO2 is a switch input that idles high, so nothing pulls a strapping
-// pin the wrong way at reset (just don't hold LEFT while powering on).
+// and GPIO2 is unused, so nothing pulls a strapping pin the wrong way at reset.
 
-// One SPI bus, shared by the display and the micro SD card.
+// One SPI bus, shared by the display, its touch controller and the SD card.
 // SCK/SDI on the display module are the SPI clock and MOSI.
 constexpr int kPinSpiSclk = 6;
 constexpr int kPinSpiMosi = 7;
@@ -42,58 +41,28 @@ constexpr int kPinSdCs = 8;
 // shifter); the card itself does 25.
 constexpr uint32_t kSdSpiHz = 20000000;
 
-// --- 5-way navigation switch ---------------------------------------------------
-// A 5-way tactile switch (up/down/left/right/centre push) drives the UI. It can
-// be wired two ways; pick the matching build environment (see platformio.ini)
-// and wire as in README.md.
-enum class NavWiring : uint8_t {
-    // One GPIO per direction, each switch to GND, internal pull-ups. The most
-    // reliable, and the switch lands on the five left-header pins in order.
-    // Uses GPIO0-4, so the direct-CAN link (which needs 0, 1 and 3) is not
-    // available in this build.
-    Digital,
-    // All five directions on one ADC pin through a resistor ladder, leaving
-    // GPIO0, 1 and 3 for the CAN transceiver and battery sense.
-    Ladder,
-};
-// Set by the build environment: `c3_supermini` (default) is digital,
-// `c3_supermini_ladder` defines OBD_PDA_NAV_LADDER.
-#ifdef OBD_PDA_NAV_LADDER
-constexpr NavWiring kNavWiring = NavWiring::Ladder;
-#else
-constexpr NavWiring kNavWiring = NavWiring::Digital;
-#endif
+// --- Touch panel -------------------------------------------------------------
+// The display module's XPT2046 resistive touch controller (its T_* pins) sits
+// on the shared SPI bus: T_CLK, T_DIN and T_DO join SCK, MOSI and MISO, and
+// T_CS gets its own pin. T_IRQ stays unconnected; the firmware polls instead.
+constexpr int kPinTouchCs = 4;
+// The XPT2046 tops out around 2.5 MHz.
+constexpr uint32_t kTouchSpiHz = 1000000;
 
-// Digital wiring: module pin -> GPIO, in left-header order.
-constexpr int kPinNavUp = 4;
-constexpr int kPinNavDown = 3;
-constexpr int kPinNavLeft = 2;   // strapping pin: idles high, fine as an input
-constexpr int kPinNavRight = 1;
-constexpr int kPinNavCenter = 0;
-
-// Ladder wiring: 10k pull-up from the pin to 3V3; each direction switches a
-// different resistor to GND, giving V = 3.3 * R / (R + 10k):
-//   centre 0R -> 0.00 V, up 1k -> 0.30 V, down 3.3k -> 0.82 V,
-//   left 6.8k -> 1.34 V, right 15k -> 1.98 V, released -> 3.3 V.
-// Thresholds sit halfway between neighbours. Calculated, not measured: check
-// the readings with the "nav" console command and adjust if needed.
-constexpr int kPinNavLadder = 4;
-constexpr uint16_t kNavLadderThresholdsMv[] = {150, 560, 1080, 1660, 2400};
-
-// The board's BOOT button (GPIO9) always works as an extra centre/select.
+// The board's BOOT button (GPIO9) is a hardware back button. Held for
+// kBootCalibrateMs it re-runs touch calibration.
 constexpr int kPinBootButton = 9;
 
-// The direct-CAN link needs GPIO0, 1 and 3, which digital nav wiring uses.
-constexpr bool kDirectCanAvailable = kNavWiring == NavWiring::Ladder;
+// GPIO2 is free.
 
-// CAN transceiver (SN65HVD230 or similar 3.3 V part), ladder builds only.
+// CAN transceiver (SN65HVD230 or similar 3.3 V part), optional.
 // The C3's built-in TWAI controller speaks CAN 2.0; the transceiver turns it
 // into CAN-H / CAN-L.
 constexpr int kPinCanTx = 0;
 constexpr int kPinCanRx = 1;
 
 // Vehicle battery voltage through a 100k / 18k divider (ADC1 channel 3),
-// direct-CAN builds only. In ELM mode the dongle reports it (ATRV).
+// optional, for direct CAN. In ELM mode the dongle reports it (ATRV).
 constexpr int kPinVbatSense = 3;
 constexpr float kVbatDividerRatio = (100.0f + 18.0f) / 18.0f;
 // Calculated, not measured: trim against a multimeter once built.
@@ -182,9 +151,16 @@ constexpr size_t kLogBufferBytes = 4096;
 constexpr uint32_t kLogFlushMs = 1000;
 
 // --- UI ---------------------------------------------------------------------
-constexpr uint32_t kButtonDebounceMs = 25;
-constexpr uint32_t kButtonLongPressMs = 600;
-constexpr uint32_t kButtonRepeatMs = 120;  // auto-repeat while a direction is held
+constexpr uint32_t kButtonDebounceMs = 25;      // BOOT button
+constexpr uint32_t kBootCalibrateMs = 3000;     // hold BOOT this long: recalibrate touch
+constexpr uint32_t kTouchPollMs = 15;
+// A touch counts after this many touched polls in a row, and ends after this
+// many untouched ones; resistive panels flicker at light pressure.
+constexpr uint8_t kTouchPressPolls = 2;
+constexpr uint8_t kTouchReleasePolls = 3;
+// Holding a scroll arrow repeats it.
+constexpr uint32_t kTouchRepeatDelayMs = 500;
+constexpr uint32_t kTouchRepeatMs = 150;
 constexpr uint32_t kUiFrameMs = 50;        // screen refresh period
 constexpr uint32_t kVbatSampleMs = 500;
 

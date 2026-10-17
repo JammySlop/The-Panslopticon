@@ -69,6 +69,25 @@ Display::Display() {
         cfg.bus_shared = true;
         panel_.config(cfg);
     }
+    {
+        auto cfg = touch_.config();
+        cfg.spi_host = SPI2_HOST;
+        cfg.bus_shared = true;
+        cfg.freq = config::kTouchSpiHz;
+        cfg.pin_sclk = config::kPinSpiSclk;
+        cfg.pin_mosi = config::kPinSpiMosi;
+        cfg.pin_miso = config::kPinSpiMiso;
+        cfg.pin_cs = config::kPinTouchCs;
+        cfg.pin_int = -1;  // T_IRQ unconnected: polled
+        // Rough raw ADC range of the panel; calibration replaces it.
+        cfg.x_min = 300;
+        cfg.x_max = 3900;
+        cfg.y_min = 300;
+        cfg.y_max = 3900;
+        cfg.offset_rotation = 0;
+        touch_.config(cfg);
+        panel_.setTouch(&touch_);
+    }
     // No backlight control: LED is wired to 3V3.
     setPanel(&panel_);
 }

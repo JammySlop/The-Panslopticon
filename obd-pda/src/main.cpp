@@ -1,8 +1,8 @@
 #include <Arduino.h>
 
-#include "buttons.h"
 #include "config.h"
 #include "console.h"
+#include "input.h"
 #include "link.h"
 #include "settings.h"
 #include "storage.h"
@@ -15,9 +15,8 @@ void setup() {
 
     settings::load();
     obdlink::select(settings::get().link);
-    buttons::begin();
-    // The battery divider shares GPIO3 with the digital nav switch.
-    if (config::kDirectCanAvailable) vbat::begin();
+    input::begin();
+    vbat::begin();
     ui::begin();
     // After the display: it starts the SPI bus the card shares. (GPIO8 is the
     // card's chip select; the on-board LED on it now shows card activity.)
@@ -27,7 +26,7 @@ void setup() {
 
 void loop() {
     obdlink::active().service();
-    if (config::kDirectCanAvailable) vbat::update();
+    vbat::update();
     console::poll();
     ui::loop();
     storage::service();

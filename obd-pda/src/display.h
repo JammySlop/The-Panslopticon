@@ -1,4 +1,5 @@
-// LovyanGFX driver for the 3.5" 240x320 ILI9341 SPI module.
+// LovyanGFX driver for the 3.5" 240x320 ILI9341 SPI module and its XPT2046
+// resistive touch panel.
 #pragma once
 
 #define LGFX_USE_V1
@@ -33,6 +34,7 @@ public:
 private:
     lgfx::Panel_ILI9341 panel_;
     InvertedDcBus bus_;
+    lgfx::Touch_XPT2046 touch_;
 };
 
 // One shared instance; the UI is the only thing that draws.

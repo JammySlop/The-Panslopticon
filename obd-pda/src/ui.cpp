@@ -5,9 +5,9 @@
 
 #include <algorithm>
 
-#include "buttons.h"
 #include "config.h"
 #include "display.h"
+#include "input.h"
 #include "link.h"
 #include "obd.h"
 #include "settings.h"
@@ -16,13 +16,19 @@
 namespace ui {
 namespace {
 
-using buttons::Event;
+using input::Event;
 
 // --- Look ------------------------------------------------------------------
 
 constexpr int kW = 240;
 constexpr int kH = 320;
-constexpr int kHeaderH = 24;
+// Tall enough to tap: the left half of the header is the back button.
+constexpr int kHeaderH = 32;
+constexpr int kBackW = 120;
+// Scroll bar along the bottom of list screens: up, an action, down.
+constexpr int kBarH = 36;
+constexpr int kBarY = 320 - kBarH;
+constexpr int kBarBtnW = 64;
 
 constexpr uint16_t kBg = 0x0000;
 constexpr uint16_t kFg = 0xFFFF;
@@ -44,6 +50,7 @@ obdlink::Link& link() { return obdlink::active(); }
 
 const char* gTitle = "";
 char gHeaderNote[16] = "";
+bool gShowBack = false;  // every screen but the main menu
 float gShownVolts = -100;
 int gShownLinkState = -1;
 int gShownRec = -1;
@@ -53,11 +60,17 @@ void drawHeader() {
     lcd.setFont(&fonts::Font2);
     lcd.setTextColor(kFg, kHeaderBg);
     lcd.setTextDatum(textdatum_t::middle_left);
-    lcd.drawString(gTitle, 6, kHeaderH / 2);
+    int x = 8;
+    if (gShowBack) {
+        constexpr int cy = kHeaderH / 2;
+        lcd.fillTriangle(8, cy, 18, cy - 8, 18, cy + 8, kAccent);
+        x = 28;
+    }
+    lcd.drawString(gTitle, x, kHeaderH / 2);
     if (gHeaderNote[0]) {
+        // Right after the title, clear of the status area on the right.
         lcd.setTextColor(kAccent, kHeaderBg);
-        lcd.setTextDatum(textdatum_t::middle_center);
-        lcd.drawString(gHeaderNote, 128, kHeaderH / 2);
+        lcd.drawString(gHeaderNote, x + lcd.textWidth(gTitle) + 8, kHeaderH / 2);
     }
     gShownVolts = -100;  // force the status area to redraw
     gShownLinkState = -1;
@@ -106,6 +119,41 @@ void updateHeaderStatus() {
 }
 
 void clearBody() { lcd.fillRect(0, kHeaderH, kW, kH - kHeaderH, kBg); }
+
+// Dim one-line hint along the bottom edge.
+void hint(const char* text) {
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextDatum(textdatum_t::bottom_center);
+    lcd.setTextColor(kDim, kBg);
+    lcd.drawString(text, kW / 2, kH - 4);
+}
+
+void drawArrow(int cx, int cy, bool up, bool enabled) {
+    const uint16_t c = enabled ? kAccent : kDim;
+    if (up) lcd.fillTriangle(cx - 11, cy + 6, cx + 11, cy + 6, cx, cy - 7, c);
+    else lcd.fillTriangle(cx - 11, cy - 6, cx + 11, cy - 6, cx, cy + 7, c);
+}
+
+void drawBar(const char* mid, uint16_t midColor = kFg, bool canUp = true, bool canDown = true) {
+    lcd.fillRect(0, kBarY, kW, kBarH, kHeaderBg);
+    drawArrow(kBarBtnW / 2, kBarY + kBarH / 2, true, canUp);
+    drawArrow(kW - kBarBtnW / 2, kBarY + kBarH / 2, false, canDown);
+    lcd.drawFastVLine(kBarBtnW, kBarY + 6, kBarH - 12, kDim);
+    lcd.drawFastVLine(kW - kBarBtnW, kBarY + 6, kBarH - 12, kDim);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextDatum(textdatum_t::middle_center);
+    lcd.setTextColor(midColor, kHeaderBg);
+    lcd.drawString(mid, kW / 2, kBarY + kBarH / 2);
+}
+
+enum class BarHit : uint8_t { None, Up, Mid, Down };
+
+BarHit barHit(const Event& ev) {
+    if (ev.y < kBarY) return BarHit::None;
+    if (ev.x < kBarBtnW) return BarHit::Up;
+    if (ev.x >= kW - kBarBtnW) return BarHit::Down;
+    return BarHit::Mid;
+}
 
 // Centred message in the body, e.g. "Reading codes...".
 void message(const char* line1, const char* line2 = nullptr, uint16_t color = kFg) {
@@ -163,7 +211,7 @@ bool openObd() {
         storage::event("OBD discovery: %u ECU(s) answering", unsigned(obd::ecuCount()));
     }
     if (!gDiscovered) {
-        message("No OBD-II response", "Ignition on? Long-press: back", kWarn);
+        message("No OBD-II response", "Ignition on? Tap to retry", kWarn);
         return false;
     }
     return true;
@@ -176,7 +224,7 @@ enum class Screen : uint8_t { Menu, Live, Sniffer, Dtc, Info, Settings, WifiPick
 struct ScreenDef {
     void (*enter)();
     void (*tick)();
-    void (*event)(Event ev);
+    void (*event)(const Event& ev);
     void (*leave)();
 };
 
@@ -211,24 +259,20 @@ void menuEnter() {
     drawHeader();
     clearBody();
     for (int i = 0; i < kMenuCount; ++i) drawMenuRow(i);
-    lcd.setFont(&fonts::Font2);
-    lcd.setTextDatum(textdatum_t::bottom_center);
-    lcd.setTextColor(kDim, kBg);
-    lcd.drawString("Up/down: move   Press: open", kW / 2, kH - 4);
+    hint("Tap to open");
 }
 
-void menuEvent(Event ev) {
+void menuEvent(const Event& ev) {
+    if (ev.repeat) return;
+    const int y = ev.y - (kHeaderH + 12);
+    if (y < 0 || y / kMenuRowH >= kMenuCount) return;
     const int old = gMenuSel;
-    if (ev == Event::Up) gMenuSel = (gMenuSel + kMenuCount - 1) % kMenuCount;
-    if (ev == Event::Down) gMenuSel = (gMenuSel + 1) % kMenuCount;
-    if (ev == Event::Select || ev == Event::Right) {
-        go(kMenuTargets[gMenuSel]);
-        return;
-    }
+    gMenuSel = y / kMenuRowH;
     if (old != gMenuSel) {
         drawMenuRow(old);
         drawMenuRow(gMenuSel);
     }
+    go(kMenuTargets[gMenuSel]);
 }
 
 // ---- Live data ----
@@ -324,7 +368,7 @@ void liveTick() {
     if (!gLiveOk) return;
     if (!link().connected()) {
         gLiveOk = false;
-        message(link().lastError(), "SELECT: reconnect", kWarn);
+        message(link().lastError(), "Tap to reconnect", kWarn);
         return;
     }
     const uint32_t now = millis();
@@ -348,18 +392,16 @@ void liveTick() {
     }
 }
 
-void liveEvent(Event ev) {
+// Tap the right half for the next page, the left half for the previous one.
+void liveEvent(const Event& ev) {
+    if (ev.repeat) return;
     if (!gLiveOk) {
-        if (ev == Event::Select) liveEnter();
+        liveEnter();
         return;
     }
     if (livePages() <= 1) return;
-    if (ev == Event::Down || ev == Event::Right || ev == Event::Select) {
-        gLivePage = (gLivePage + 1) % livePages();
-    } else if (ev == Event::Up) {
-        gLivePage = (gLivePage + livePages() - 1) % livePages();
-    }
-    else return;
+    if (ev.x >= kW / 2) gLivePage = (gLivePage + 1) % livePages();
+    else gLivePage = (gLivePage + livePages() - 1) % livePages();
     gLiveNext = 0;
     drawLivePage();
 }
@@ -384,10 +426,9 @@ struct SnifferRow {
     bool highlighted = false;
 };
 
-constexpr int kSnifferFooterH = 18;
 constexpr int kSnifferRowH = 16;
-constexpr int kSnifferRows = (kH - kHeaderH - kSnifferFooterH) / kSnifferRowH;
-// Frames handled per loop, so a busy bus can't starve the buttons and display.
+constexpr int kSnifferRows = (kBarY - kHeaderH) / kSnifferRowH;
+// Frames handled per loop, so a busy bus can't starve the touch panel and display.
 constexpr int kSnifferFramesPerTick = 200;
 
 SnifferEntry gEntries[config::kSnifferMaxIds];
@@ -482,16 +523,13 @@ void drawSnifferRow(int row, uint32_t now) {
     r.highlighted = lit;
 }
 
+// Bar: page up, the counts (tap to pause), page down.
 void drawSnifferFooter() {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "%u ids  %lu/s  dropped %lu", unsigned(gEntryCount),
-             static_cast<unsigned long>(gBusRate), static_cast<unsigned long>(link().monitorDropped()));
-    const int y = kH - kSnifferFooterH;
-    lcd.fillRect(0, y, kW, kSnifferFooterH, kHeaderBg);
-    lcd.setFont(&fonts::Font2);
-    lcd.setTextDatum(textdatum_t::middle_left);
-    lcd.setTextColor(link().monitorDropped() ? kWarn : kDim, kHeaderBg);
-    lcd.drawString(buf, 4, y + kSnifferFooterH / 2);
+    char buf[32];
+    const unsigned long dropped = link().monitorDropped();
+    if (dropped) snprintf(buf, sizeof(buf), "%lu/s drop %lu", static_cast<unsigned long>(gBusRate), dropped);
+    else snprintf(buf, sizeof(buf), "%u ids %lu/s", unsigned(gEntryCount), static_cast<unsigned long>(gBusRate));
+    drawBar(buf, dropped ? kWarn : kFg);
 }
 
 // candump log format, which SavvyCAN, python-can and can-utils all read:
@@ -542,7 +580,7 @@ void snifferTick() {
     if (!gSnifferOk) return;
     if (!link().connected()) {
         gSnifferOk = false;
-        message(link().lastError(), "SELECT: reconnect", kWarn);
+        message(link().lastError(), "Tap to reconnect", kWarn);
         return;
     }
     const uint32_t now = millis();
@@ -585,19 +623,21 @@ void snifferTick() {
     }
 }
 
-void snifferEvent(Event ev) {
+void snifferEvent(const Event& ev) {
     if (!gSnifferOk) {
-        if (ev == Event::Select) snifferEnter();
+        if (!ev.repeat) snifferEnter();
         return;
     }
     const size_t maxTop = gEntryCount > size_t(kSnifferRows) ? gEntryCount - kSnifferRows : 0;
-    if (ev == Event::Up && gSnifferTop > 0) --gSnifferTop;
-    if (ev == Event::Down && gSnifferTop < maxTop) ++gSnifferTop;
-    // Right jumps a screenful down (left is back).
-    if (ev == Event::Right) gSnifferTop = min(gSnifferTop + kSnifferRows, maxTop);
-    if (ev == Event::Select) {
-        gSnifferPaused = !gSnifferPaused;
-        snifferNote();
+    switch (barHit(ev)) {
+        case BarHit::Up: gSnifferTop = gSnifferTop > size_t(kSnifferRows) ? gSnifferTop - kSnifferRows : 0; break;
+        case BarHit::Down: gSnifferTop = min(gSnifferTop + kSnifferRows, maxTop); break;
+        case BarHit::Mid:
+            if (ev.repeat) return;
+            gSnifferPaused = !gSnifferPaused;
+            snifferNote();
+            break;
+        case BarHit::None: return;
     }
     for (SnifferRow& r : gRows) r.drawnAt = 0;
 }
@@ -629,7 +669,7 @@ void drawDtcList() {
         lcd.drawString("No stored or pending codes", 8, y);
     }
     constexpr int kLineH = 28;
-    const size_t visible = (kH - y - 40) / kLineH;  // leave room for the footer lines
+    const size_t visible = (kBarY - y - 22) / kLineH;  // leave room for the "Saved" line
     for (size_t i = gDtcTop; i < gDtcCount && i < gDtcTop + visible; ++i) {
         const obd::Dtc& d = gDtcs[i];
         lcd.setFont(&fonts::Font4);
@@ -643,17 +683,15 @@ void drawDtcList() {
         lcd.drawString(buf, 100, y + 6);
         y += kLineH;
     }
-    lcd.setFont(&fonts::Font2);
-    lcd.setTextDatum(textdatum_t::bottom_center);
-    lcd.setTextColor(kDim, kBg);
     if (gDtcSavedAs[0]) {
         char saved[40];
         snprintf(saved, sizeof(saved), "Saved %s", gDtcSavedAs);
+        lcd.setFont(&fonts::Font2);
+        lcd.setTextDatum(textdatum_t::bottom_center);
         lcd.setTextColor(kGood, kBg);
-        lcd.drawString(saved, kW / 2, kH - 22);
-        lcd.setTextColor(kDim, kBg);
+        lcd.drawString(saved, kW / 2, kBarY - 4);
     }
-    lcd.drawString("Press: re-read   Left: back", kW / 2, kH - 4);
+    drawBar("Re-read", kFg, gDtcTop > 0, gDtcTop + 1 < gDtcCount);
 }
 
 // A plain-text record of this read: what was connected, the VIN, the codes.
@@ -709,7 +747,7 @@ void readDtcs() {
     gDtcSavedAs[0] = '\0';
     if (settings::get().saveScans && storage::mounted()) saveScanReport();
     char note[16];
-    snprintf(note, sizeof(note), "%u codes", unsigned(gDtcCount));
+    snprintf(note, sizeof(note), "(%u)", unsigned(gDtcCount));
     setHeaderNote(note);
     drawDtcList();
 }
@@ -721,14 +759,18 @@ void dtcEnter() {
     readDtcs();
 }
 
-void dtcEvent(Event ev) {
-    if (ev == Event::Select) {
+void dtcEvent(const Event& ev) {
+    if (!gDtcOk) {
+        if (!ev.repeat) readDtcs();
+        return;
+    }
+    const BarHit hit = barHit(ev);
+    if (hit == BarHit::Mid && !ev.repeat) {
         readDtcs();
         return;
     }
-    if (!gDtcOk) return;
-    if (ev == Event::Up && gDtcTop > 0) --gDtcTop;
-    else if (ev == Event::Down && gDtcTop + 1 < gDtcCount) ++gDtcTop;
+    if (hit == BarHit::Up && gDtcTop > 0) --gDtcTop;
+    else if (hit == BarHit::Down && gDtcTop + 1 < gDtcCount) ++gDtcTop;
     else return;
     drawDtcList();
 }
@@ -778,10 +820,11 @@ void infoEnter() {
     if (v > 0) snprintf(buf, sizeof(buf), "%.2f V", v);
     else strlcpy(buf, "unknown", sizeof(buf));
     infoLine(y, "Battery at OBD port", buf);
+    hint("Tap to refresh");
 }
 
-void infoEvent(Event ev) {
-    if (ev == Event::Select) infoEnter();
+void infoEvent(const Event& ev) {
+    if (!ev.repeat) infoEnter();
 }
 
 // ---- Settings ----
@@ -799,9 +842,9 @@ enum SettingItem {
     kSetSd,
     kSetCount
 };
-int gSetSel = 0;
-constexpr int kSetRowH = 48;
-constexpr int kSetVisible = (kH - kHeaderH - 6) / kSetRowH;
+int gSetSel = -1;  // last row tapped, highlighted
+// All rows fit on one screen, so there is nothing to scroll.
+constexpr int kSetRowH = (kH - kHeaderH) / kSetCount;
 
 void drawSettings() {
     clearBody();
@@ -811,33 +854,29 @@ void drawSettings() {
         "Connection",       "Dongle WiFi network",  "CAN bitrate (direct)",    "Reconnect",
         "Record sniffer",   "Record live data",     "Save trouble code scans", "SD card"};
     char value[64];
-    // Scroll so the selected row is always on screen.
-    const int top = gSetSel >= kSetVisible ? gSetSel - kSetVisible + 1 : 0;
-    for (int i = top; i < kSetCount && i < top + kSetVisible; ++i) {
-        const int y = kHeaderH + 6 + (i - top) * kSetRowH;
+    for (int i = 0; i < kSetCount; ++i) {
+        const int y = kHeaderH + i * kSetRowH;
         const bool sel = i == gSetSel;
         // Settings that don't apply to the current link are greyed out.
         const bool needsCard = i == kSetRecSniff || i == kSetRecLive || i == kSetSaveScans;
-        const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm) ||
-                               (i == kSetLink && !config::kDirectCanAvailable) || (needsCard && !storage::mounted()));
+        const bool applies = !((i == kSetWifi && !elm) || (i == kSetRate && elm) || (needsCard && !storage::mounted()));
         const uint16_t bg = sel ? kSelectBg : kBg;
-        lcd.fillRoundRect(8, y, kW - 16, kSetRowH - 6, 6, bg);
-        if (sel) lcd.drawRoundRect(8, y, kW - 16, kSetRowH - 6, 6, kAccent);
+        lcd.fillRoundRect(6, y + 1, kW - 12, kSetRowH - 2, 5, bg);
+        if (sel) lcd.drawRoundRect(6, y + 1, kW - 12, kSetRowH - 2, 5, kAccent);
         lcd.setFont(&fonts::Font2);
         lcd.setTextDatum(textdatum_t::top_left);
         lcd.setTextColor(kDim, bg);
-        lcd.drawString(kLabels[i], 18, y + 5);
+        lcd.drawString(kLabels[i], 14, y + 2);
         switch (i) {
             case kSetLink:
                 strlcpy(value, elm ? "ELM327 over WiFi" : "Direct CAN transceiver", sizeof(value));
-                if (!config::kDirectCanAvailable) strlcat(value, " (only)", sizeof(value));
                 break;
             case kSetWifi:
                 snprintf(value, sizeof(value), "%s%s", s.wifiSsid, s.wifiPass[0] ? " (pw set)" : "");
                 break;
             case kSetRate: rateLabel(s.canBitrate, value, sizeof(value)); break;
             case kSetReconnect:
-                strlcpy(value, link().connected() ? "connected - press to redo" : "press to connect", sizeof(value));
+                strlcpy(value, link().connected() ? "connected - tap to redo" : "tap to connect", sizeof(value));
                 break;
             case kSetRecSniff: strlcpy(value, s.recordSniff ? "on: sniff.log (candump)" : "off", sizeof(value)); break;
             case kSetRecLive: strlcpy(value, s.recordLive ? "on: live.csv" : "off", sizeof(value)); break;
@@ -847,11 +886,11 @@ void drawSettings() {
                     snprintf(value, sizeof(value), "%.1f GB free  %s", storage::freeBytes() / 1e9,
                              storage::sessionDir()[0] ? storage::sessionDir() : "");
                 } else {
-                    strlcpy(value, "no card - press to retry", sizeof(value));
+                    strlcpy(value, "no card - tap to retry", sizeof(value));
                 }
         }
         lcd.setTextColor(applies ? kFg : kDim, bg);
-        lcd.drawString(value, 18, y + 23);
+        lcd.drawString(value, 14, y + 17);
     }
 }
 
@@ -862,53 +901,52 @@ void settingsEnter() {
     drawSettings();
 }
 
-// Right or press steps a value forward, wrapping round (left is back).
-void settingsEvent(Event ev) {
+// Tapping a row steps its value forward, wrapping round, or runs its action.
+void settingsEvent(const Event& ev) {
+    if (ev.repeat) return;
+    const int row = (ev.y - kHeaderH) / kSetRowH;
+    if (row < 0 || row >= kSetCount) return;
+    gSetSel = row;
     settings::Settings& s = settings::get();
-    if (ev == Event::Up) gSetSel = (gSetSel + kSetCount - 1) % kSetCount;
-    if (ev == Event::Down) gSetSel = (gSetSel + 1) % kSetCount;
-    if (ev == Event::Right || ev == Event::Select) {
-        switch (gSetSel) {
-            case kSetLink:
-                if (!config::kDirectCanAvailable) break;  // only one choice
-                s.link = s.link == settings::LinkKind::Elm327Wifi ? settings::LinkKind::DirectCan
-                                                                    : settings::LinkKind::Elm327Wifi;
-                obdlink::select(s.link);
-                gDiscovered = false;
-                break;
-            case kSetWifi:
-                if (s.link == settings::LinkKind::Elm327Wifi) {
-                    go(Screen::WifiPick);
-                    return;
-                }
-                break;
-            case kSetRate: {
-                constexpr size_t n = sizeof(kRateChoices) / sizeof(kRateChoices[0]);
-                size_t i = 0;
-                while (i < n && kRateChoices[i] != s.canBitrate) ++i;
-                s.canBitrate = kRateChoices[(i + 1) % n];
-                if (s.link == settings::LinkKind::DirectCan) link().disconnect();
-                break;
+    switch (gSetSel) {
+        case kSetLink:
+            s.link = s.link == settings::LinkKind::Elm327Wifi ? settings::LinkKind::DirectCan
+                                                                : settings::LinkKind::Elm327Wifi;
+            obdlink::select(s.link);
+            gDiscovered = false;
+            break;
+        case kSetWifi:
+            if (s.link == settings::LinkKind::Elm327Wifi) {
+                go(Screen::WifiPick);
+                return;
             }
-            case kSetRecSniff: s.recordSniff = !s.recordSniff; break;
-            case kSetRecLive: s.recordLive = !s.recordLive; break;
-            case kSetSaveScans: s.saveScans = !s.saveScans; break;
-            case kSetSd:
-                message("Mounting SD card...");
-                storage::event(storage::remount() ? "SD card mounted" : "SD card: no card");
-                break;
-            default:
-                link().disconnect();
-                if (openLink()) {
-                    message("Connected", link().shortName(), kGood);
-                    delay(800);
-                } else {
-                    delay(2000);  // leave the failure reason up for a moment
-                }
-                break;
+            break;
+        case kSetRate: {
+            constexpr size_t n = sizeof(kRateChoices) / sizeof(kRateChoices[0]);
+            size_t i = 0;
+            while (i < n && kRateChoices[i] != s.canBitrate) ++i;
+            s.canBitrate = kRateChoices[(i + 1) % n];
+            if (s.link == settings::LinkKind::DirectCan) link().disconnect();
+            break;
         }
-        settings::save();
+        case kSetRecSniff: s.recordSniff = !s.recordSniff; break;
+        case kSetRecLive: s.recordLive = !s.recordLive; break;
+        case kSetSaveScans: s.saveScans = !s.saveScans; break;
+        case kSetSd:
+            message("Mounting SD card...");
+            storage::event(storage::remount() ? "SD card mounted" : "SD card: no card");
+            break;
+        default:
+            link().disconnect();
+            if (openLink()) {
+                message("Connected", link().shortName(), kGood);
+                delay(800);
+            } else {
+                delay(2000);  // leave the failure reason up for a moment
+            }
+            break;
     }
+    settings::save();
     drawSettings();
 }
 
@@ -923,10 +961,10 @@ struct Network {
 
 constexpr size_t kMaxNetworks = 16;
 constexpr int kNetRowH = 30;
-constexpr int kNetRows = (kH - kHeaderH - 24) / kNetRowH;
+constexpr int kNetRows = (kBarY - kHeaderH - 4) / kNetRowH;
 Network gNets[kMaxNetworks];
 size_t gNetCount = 0;
-size_t gNetSel = 0;
+size_t gNetTop = 0;  // first row on screen
 
 // Names the common ELM327 WiFi clones use for their access point.
 bool looksLikeObd(const char* ssid) {
@@ -944,14 +982,15 @@ bool looksLikeObd(const char* ssid) {
 void drawNetworks() {
     clearBody();
     if (gNetCount == 0) {
-        message("No WiFi networks found", "SELECT: scan again", kWarn);
+        message("No WiFi networks found", "Tap to scan again", kWarn);
         return;
     }
-    const size_t top = gNetSel >= size_t(kNetRows) ? gNetSel - kNetRows + 1 : 0;
+    const size_t top = gNetTop;
     for (size_t i = top; i < gNetCount && i < top + kNetRows; ++i) {
         const Network& n = gNets[i];
         const int y = kHeaderH + 4 + (i - top) * kNetRowH;
-        const bool sel = i == gNetSel;
+        // The network currently set is highlighted.
+        const bool sel = strcmp(n.ssid, settings::get().wifiSsid) == 0;
         const uint16_t bg = sel ? kSelectBg : kBg;
         lcd.fillRoundRect(4, y, kW - 8, kNetRowH - 3, 4, bg);
         lcd.setFont(&fonts::Font2);
@@ -964,9 +1003,7 @@ void drawNetworks() {
         lcd.setTextColor(kDim, bg);
         lcd.drawString(meta, kW - 10, y + (kNetRowH - 3) / 2);
     }
-    lcd.setTextDatum(textdatum_t::bottom_center);
-    lcd.setTextColor(kDim, kBg);
-    lcd.drawString("Press: use   Left: back", kW / 2, kH - 4);
+    drawBar("Rescan", kFg, gNetTop > 0, gNetTop + kNetRows < gNetCount);
 }
 
 void scanNetworks() {
@@ -994,7 +1031,7 @@ void scanNetworks() {
         if (a.likelyObd != b.likelyObd) return a.likelyObd;
         return a.rssi > b.rssi;
     });
-    gNetSel = 0;
+    gNetTop = 0;
 }
 
 void wifiEnter() {
@@ -1005,16 +1042,24 @@ void wifiEnter() {
     drawNetworks();
 }
 
-void wifiEvent(Event ev) {
+// Tap a network to use it; the bar scrolls and rescans.
+void wifiEvent(const Event& ev) {
     if (gNetCount == 0) {
-        if (ev == Event::Select) wifiEnter();
+        if (!ev.repeat) wifiEnter();
         return;
     }
-    if (ev == Event::Up && gNetSel > 0) --gNetSel;
-    if (ev == Event::Down && gNetSel + 1 < gNetCount) ++gNetSel;
-    if (ev == Event::Select) {
+    const BarHit hit = barHit(ev);
+    if (hit == BarHit::Up && gNetTop > 0) --gNetTop;
+    if (hit == BarHit::Down && gNetTop + kNetRows < gNetCount) ++gNetTop;
+    if (hit == BarHit::Mid && !ev.repeat) {
+        wifiEnter();
+        return;
+    }
+    const size_t index = gNetTop + (ev.y - kHeaderH - 4) / kNetRowH;
+    if (hit == BarHit::None && !ev.repeat && ev.y >= kHeaderH + 4 && index < gNetCount &&
+        index < gNetTop + kNetRows) {
         settings::Settings& s = settings::get();
-        const Network& n = gNets[gNetSel];
+        const Network& n = gNets[index];
         if (strcmp(s.wifiSsid, n.ssid) != 0) s.wifiPass[0] = '\0';  // old password was for another network
         strlcpy(s.wifiSsid, n.ssid, sizeof(s.wifiSsid));
         settings::save();
@@ -1045,11 +1090,30 @@ Screen gScreen = Screen::Menu;
 void go(Screen s) {
     kScreens[static_cast<int>(gScreen)].leave();
     gScreen = s;
+    gShowBack = s != Screen::Menu;
     kScreens[static_cast<int>(s)].enter();
     updateHeaderStatus();
 }
 
+void back() {
+    if (gScreen == Screen::WifiPick) go(Screen::Settings);
+    else if (gScreen != Screen::Menu) go(Screen::Menu);
+}
+
 }  // namespace
+
+void calibrateTouch() {
+    lcd.fillScreen(kBg);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextDatum(textdatum_t::middle_center);
+    lcd.setTextColor(kFg, kBg);
+    lcd.drawString("Touch calibration", kW / 2, kH / 2 - 22);
+    lcd.setTextColor(kDim, kBg);
+    lcd.drawString("Tap the tip of each arrow", kW / 2, kH / 2);
+    lcd.drawString("(a stylus or fingernail is best)", kW / 2, kH / 2 + 18);
+    input::calibrate(kAccent, kBg);
+    Serial.println("[touch] calibrated");
+}
 
 void begin() {
     lcd.init();
@@ -1060,20 +1124,28 @@ void begin() {
     gRow.createSprite(kW, kSnifferRowH);
     gTile.setColorDepth(16);
     gTile.createSprite(kTileW, kTileH);
+    if (!input::loadCalibration()) calibrateTouch();
     go(Screen::Menu);
 }
 
 void loop() {
-    const Event ev = buttons::poll();
-    // LEFT is back on every screen, so there is always a one-tap way out;
-    // holding the push is a second one.
-    const Event action = ev == Event::Left ? Event::Back : ev;
-    if (action == Event::Back && gScreen == Screen::WifiPick) {
-        go(Screen::Settings);
-    } else if (action == Event::Back && gScreen != Screen::Menu) {
-        go(Screen::Menu);
-    } else if (ev != Event::None) {
-        kScreens[static_cast<int>(gScreen)].event(ev);
+    const Event ev = input::poll();
+    switch (ev.kind) {
+        case Event::Kind::Back: back(); break;
+        case Event::Kind::Calibrate:
+            calibrateTouch();
+            go(gScreen);
+            break;
+        case Event::Kind::Tap:
+            if (ev.y < kHeaderH) {
+                // The header's left half (with the arrow) is back; the rest is
+                // status only.
+                if (!ev.repeat && ev.x < kBackW) back();
+            } else {
+                kScreens[static_cast<int>(gScreen)].event(ev);
+            }
+            break;
+        case Event::Kind::None: break;
     }
     kScreens[static_cast<int>(gScreen)].tick();
     updateHeaderStatus();

@@ -18,7 +18,6 @@ void load() {
     Settings& s = gSettings;
     s.link = static_cast<LinkKind>(gPrefs.getUChar("link", static_cast<uint8_t>(LinkKind::Elm327Wifi)));
     if (s.link != LinkKind::Elm327Wifi && s.link != LinkKind::DirectCan) s.link = LinkKind::Elm327Wifi;
-    if (!config::kDirectCanAvailable) s.link = LinkKind::Elm327Wifi;
     s.canBitrate = gPrefs.getUInt("rate", 0);
     if (gPrefs.getString("ssid", s.wifiSsid, sizeof(s.wifiSsid)) == 0) {
         strlcpy(s.wifiSsid, config::kElmDefaultSsid, sizeof(s.wifiSsid));

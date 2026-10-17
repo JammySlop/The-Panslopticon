@@ -8,5 +8,8 @@ void begin();
 void loop();
 // Redraws the current screen, e.g. after settings changed over serial.
 void refresh();
+// Runs the four-corner touch calibration (blocks until done) and saves it.
+// Call refresh() afterwards to redraw the screen.
+void calibrateTouch();
 
 }  // namespace ui

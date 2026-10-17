@@ -1,7 +1,7 @@
 # obd-pda
 
 A pocket OBD-II / CAN bus tool: an ESP32-C3 Super Mini (Tenstar Robot) with a
-3.5" 240x320 ILI9341 SPI display, a 5-way navigation switch and a micro SD card for
+3.5" 240x320 ILI9341 SPI touch display and a micro SD card for
 logs and scan reports. It talks to the car through a
 **generic ELM327 WiFi dongle** (the cheap "WiFi_OBDII" kind) plugged into the
 OBD-II port, so the handheld needs no wiring to the car at all: just USB
@@ -19,9 +19,9 @@ Settings; see [Direct CAN (optional)](#direct-can-optional).
 
 | Screen | What you get | Transmits? |
 |---|---|---|
-| **Live data** | Tiles for up to 18 standard PIDs (RPM, speed, coolant, load, throttle, MAF/MAP, fuel trims, ECU volts...). Only PIDs the car reports as supported are shown. Up/down or left/right page through them. | Yes: OBD service 01 requests |
-| **CAN sniffer** | Every arbitration ID on the bus, sorted, with its latest data, changed bytes highlighted in yellow, and a frames/s rate. SELECT pauses. Through an ELM327 this is `ATMA` and is *lossy* (see below). | **No**: silent monitoring, does not even ACK |
-| **Trouble codes** | Check-engine light state, stored (service 03) and pending (service 07) codes, and which ECU reported each. SELECT re-reads. | Yes: read-only requests |
+| **Live data** | Tiles for up to 18 standard PIDs (RPM, speed, coolant, load, throttle, MAF/MAP, fuel trims, ECU volts...). Only PIDs the car reports as supported are shown. Tap either half of the screen to page through them. | Yes: OBD service 01 requests |
+| **CAN sniffer** | Every arbitration ID on the bus, sorted, with its latest data, changed bytes highlighted in yellow, and a frames/s rate. Tapping the counts pauses. Through an ELM327 this is `ATMA` and is *lossy* (see below). | **No**: silent monitoring, does not even ACK |
+| **Trouble codes** | Check-engine light state, stored (service 03) and pending (service 07) codes, and which ECU reported each. Re-read from the bottom bar. | Yes: read-only requests |
 | **Vehicle info** | VIN, connection details (ELM version, protocol, dongle IP, WiFi signal), how many ECUs answer, supported PID count, battery voltage at the port. | Yes: read-only requests |
 | **Settings** | Connection type (ELM327 WiFi / direct CAN), dongle WiFi network (scan and pick), CAN bitrate for direct mode, reconnect, SD recording on/off, SD card status. Saved to flash. | No |
 
@@ -50,7 +50,7 @@ purpose. Every request is a standard OBD-II read.
 6. Battery voltage in the header comes from the dongle's `ATRV`.
 
 The connection opens the first time a screen needs the car, and reopens after
-a dropout (SELECT on the error message retries).
+a dropout (tapping the error message retries).
 
 **Supported:** cars on ISO 15765-4 CAN (ELM protocols 6-9: 11/29-bit, 500/250k).
 That is every US car from 2008, and most EU/Asian cars from the mid-2000s.
@@ -60,7 +60,7 @@ supported yet.
 **The sniffer over an ELM327 is lossy.** `ATMA` prints every frame as text over
 the dongle's internal UART, which tops out at a few hundred frames/s, while a
 busy powertrain bus carries 1,000-2,000. The ELM then reports `BUFFER FULL`;
-we count those and restart monitoring. The footer shows the drop count and
+we count those and restart monitoring. The bottom bar shows the drop count and
 the header shows `lossy`. Fine for spotting which IDs exist and watching slow
 ones; for a complete capture use direct CAN. Monitoring uses `ATCSM1`
 (silent mode), so the ELM does not acknowledge frames. Clones older than
@@ -68,8 +68,8 @@ v1.4b may not support that; the sniffer still works, but the ELM then ACKs.
 
 ## Configuring over USB
 
-Typing a WiFi password with a 5-way switch is miserable, so text settings are
-also available on the USB serial console (`pio device monitor`, 115200):
+Typing a WiFi password on a resistive touch screen is miserable, so text
+settings are also available on the USB serial console (`pio device monitor`, 115200):
 
 ```
 show                 current settings
@@ -78,28 +78,33 @@ pass <password>      dongle WiFi password ("pass" alone clears it)
 host <ip>|auto       dongle address (auto = WiFi gateway)
 port <n>|auto        dongle TCP port
 link elm|can         ELM327 over WiFi, or direct CAN transceiver
-nav                  which switch direction is held (and the ladder voltage)
+touch                print every tap (on/off), to check the calibration
+touchcal             recalibrate the touch panel
 ```
 
-## Controls: 5-way switch
+## Controls: touch
 
-One 5-way tactile switch (up / down / left / right / push) does everything. The
-board's BOOT button also works as the push.
+The display's resistive touch panel does everything; a stylus or fingernail
+works best. The board's BOOT button is a hardware back button.
 
-| Input | Menus and lists | Live data | Sniffer | Settings |
-|---|---|---|---|---|
-| Up / down | Move | Previous / next page | Scroll a row | Move |
-| **Left** | **Back** | **Back** | **Back** | **Back** |
-| Right | Open (main menu) | Next page | Down a screenful | Next value / open |
-| Push | Open / do it | Next page | Pause | Next value / open |
-| Hold push (0.6 s) | Back | ← | ← | ← |
+| Where | What it does |
+|---|---|
+| **Header, left half** (the ◀ arrow) | **Back**: to the main menu, or from the WiFi list to Settings. BOOT does the same. |
+| Main menu | Tap an item to open it. |
+| Live data | Tap the right half for the next page, the left half for the previous one. |
+| Sniffer | Bottom bar: ▲ / ▼ page through the IDs, the middle (the counts) pauses. |
+| Trouble codes | Bottom bar: ▲ / ▼ scroll, the middle re-reads. |
+| Vehicle info | Tap anywhere to refresh. |
+| Settings | Tap a row to step its value forward (wrapping round) or run it. |
+| WiFi list | Tap a network to use it. Bottom bar: ▲ / ▼ scroll, the middle rescans. |
+| Error screens | Tap to retry. |
 
-**Left is always back**, one tap on every screen: to the main menu, or from
-the WiFi list to Settings. Holding the push is a second way back. Settings
-values step forward only and wrap round.
+Holding a ▲ / ▼ arrow repeats it.
 
-Directions auto-repeat when held. A held push becomes Back, so the push acts
-on release.
+**Calibration** runs on the first power-up: tap the tip of each corner arrow
+in turn. It is saved in flash. To redo it, hold BOOT for 3 seconds, or type
+`touchcal` on the serial console. `touch` on the console prints the position
+of every tap, to check it.
 
 ## Parts
 
@@ -108,9 +113,8 @@ on release.
 | Part | Notes |
 |---|---|
 | ESP32-C3 Super Mini (Tenstar Robot) | WiFi 2.4 GHz, native USB, 4 MB flash |
-| 3.5" 240x320 ILI9341 SPI display | Pins: VCC GND CS RESET DC SDI SCK LED SDO, plus T_* touch pins. Only the first eight are used; leave SDO and the touch pins unconnected. Ignore the module's own SD slot too: logging uses the separate SD module. DC is the normal polarity (low = command); for a module with an inverted DC line, set `kLcdDcInverted`. |
+| 3.5" 240x320 ILI9341 SPI display with XPT2046 resistive touch | Pins: VCC GND CS RESET DC SDI SCK LED SDO, then T_CLK T_CS T_DIN T_DO T_IRQ. Leave SDO and T_IRQ unconnected. Ignore the module's own SD slot too: logging uses the separate SD module. DC is the normal polarity (low = command); for a module with an inverted DC line, set `kLcdDcInverted`. |
 | 6-pin micro SD card module | 3.3 V module (GND VCC MISO MOSI SCK CS). FAT32 card; 32 GB or smaller is the safe choice. If yours is the blue kind with an AMS1117 regulator on it, it needs 5 V instead (see Power below). |
-| 5-way tactile switch | A bare 6-pin 5-way navigation switch (3 pins per side; see [its pinout](#the-5-way-switch-bare-6-pins)) or a "5-way navigation button module". Ignore any SET/RST pins on modules. |
 | ELM327 WiFi dongle | Any generic "WiFi_OBDII" style. Bluetooth-only dongles won't work: the C3 has BLE but not Bluetooth Classic, which most of those use. |
 | USB-C power | The car's USB socket or a power bank |
 
@@ -123,103 +127,36 @@ in the same car that rarely matters; the info screen shows the signal (dBm).
                  ESP32-C3 Super Mini (USB-C at the top)
                   ┌─────────────┐
             5V  ──┤             ├── 5    LCD DC
- NAV COM    G   ──┤             ├── 6    SPI clock: LCD SCK + SD SCK
- POWER *    3V3 ──┤             ├── 7    SPI data:  LCD SDI + SD MOSI
- NAV UP     4   ──┤             ├── 8    SD CS (on-board LED: card activity)
- NAV DOWN   3   ──┤             ├── 9    (on-board BOOT button: also PUSH)
- NAV LEFT   2   ──┤             ├── 10   LCD CS
- NAV RIGHT  1   ──┤             ├── 20   SD MISO
- NAV PUSH   0   ──┤             ├── 21   LCD RESET
+            G   ──┤             ├── 6    SPI clock: LCD SCK + T_CLK + SD SCK
+ POWER *    3V3 ──┤             ├── 7    SPI data:  LCD SDI + T_DIN + SD MOSI
+ TOUCH CS   4   ──┤             ├── 8    SD CS (on-board LED: card activity)
+ (CAN/vbat) 3   ──┤             ├── 9    (on-board BOOT button: back)
+ (free)     2   ──┤             ├── 10   LCD CS
+ (CAN RX)   1   ──┤             ├── 20   SPI in: T_DO + SD MISO
+ (CAN TX)   0   ──┤             ├── 21   LCD RESET
                   └─────────────┘
 
  * 3V3 feeds the display (VCC and LED) and the SD module (VCC).
-   G is the ground for the switch, the display and the SD module.
+   G is the ground for the display and the SD module.
+   Pins in brackets are only for the optional direct-CAN wiring.
 ```
 
-The switch's five contacts and common line run straight down the left header:
-common to **G**, then up/down/left/right/push to **GPIO 4, 3, 2, 1, 0**. Each
-contact just shorts its pin to ground; the C3's internal pull-ups do the rest,
-so no other parts are needed. Module boards usually label their pins `COM UP
-DWN LFT RHT MID`; for a bare 6-pin switch, see below.
-
-### The 5-way switch (bare, 6 pins)
-
-A bare 5-way navigation switch has 6 pins, 3 on each of two opposite sides:
-one **common**, one **push** (centre), and one per **direction**. Which pin
-is which varies between parts. This is the switch this build was mapped on,
-checked with a multimeter and mounted the way it sits under the screen:
-
-```
-   Looking down on the switch, pins on the left and right sides
-
-                 ┌─────────────────────┐
-   A  COMMON  ───┤                     ├─── B  LEFT
-                 │          ▲          │
-   (mid) DOWN ───┤      ◄   ●   ►      ├─── (mid) UP
-                 │          ▼          │
-   C  PUSH    ───┤                     ├─── D  RIGHT
-                 └─────────────────────┘
-
-   Corner A is common: A + mid-left = down, A + C = push (centre click),
-   A + D = right, A + mid-right = up, A + B = left.
-```
-
-Wire it like this:
-
-```
-   5-way switch                       ESP32-C3 Super Mini (left header)
-
-   A          COMMON ──────────────── G
-   mid-right  UP     ──────────────── GPIO4
-   mid-left   DOWN   ──────────────── GPIO3
-   B          LEFT   ──────────────── GPIO2
-   D          RIGHT  ──────────────── GPIO1
-   C          PUSH   ──────────────── GPIO0
-```
-
-**Using a different switch, or mounting it rotated?** Check it with a
-multimeter in continuity (beep) mode first:
-
-1. **Find common.** It's the one pin that beeps against a *different* pin for
-   each of the five actions (on the switch above, corner A).
-2. **Find push.** Press the stem straight down: the pin that now beeps
-   against common is push.
-3. **Map the directions.** Hold the switch the way it'll sit under the
-   screen, push up, down, left and right in turn, and note which pin beeps
-   each time.
-4. If two pins beep together with nothing pressed, they're joined inside
-   (some switches double up common). Treat them as one pin.
-
-Then wire common to **G** and each function to its GPIO as in the table
-above, whichever physical pin it turns out to be.
-
-No resistors or capacitors needed: the firmware enables the internal
-pull-ups and debounces in software.
-
-If a direction turns out swapped after it's soldered, don't rewire: swap the
-GPIO numbers in `kPinNavUp/Down/Left/Right` in `include/config.h` and
-reflash. To check, type `nav` on the serial console while holding a
-direction; it prints which key the firmware thinks is held.
-
-For the ladder build (direct CAN), the same switch wires as shown in
-[5-way switch on a resistor ladder](#5-way-switch-on-a-resistor-ladder):
-common (A) to the GPIO4 node, and each direction and push to ground
-through its resistor.
+The touch controller is a second SPI device inside the display module: its
+clock, data-in and data-out (`T_CLK`, `T_DIN`, `T_DO`) join the shared bus,
+and `T_CS` gets GPIO4. `T_IRQ` stays unconnected; the firmware polls.
 
 | GPIO | Connects to | Why this pin |
 |---|---|---|
-| 0 | Switch **push / centre** | |
-| 1 | Switch **right** | |
-| 2 | Switch **left** | Strapping pin; fine as a pulled-up input (just don't hold LEFT while powering on). |
-| 3 | Switch **down** | |
-| 4 | Switch **up** | |
+| 0, 1, 3 | Free, or direct CAN (see below) | |
+| 2 | Free | Strapping pin; leave it unconnected or pulled high. |
+| 4 | Touch **T_CS** | |
 | 5 | LCD **DC** | |
-| 6 | LCD **SCK** and SD **SCK** | Shared SPI clock. |
-| 7 | LCD **SDI** and SD **MOSI** | Shared SPI data out. |
+| 6 | LCD **SCK**, touch **T_CLK** and SD **SCK** | Shared SPI clock. |
+| 7 | LCD **SDI**, touch **T_DIN** and SD **MOSI** | Shared SPI data out. |
 | 8 | SD **CS** | Strapping pin, idles high. The on-board LED is on this pin too, so it lights while the card is being accessed. |
-| 9 | On-board BOOT button | Strapping pin, already wired to the button; a second push button. |
+| 9 | On-board BOOT button | Strapping pin, already wired to the button; back. Held 3 s, it recalibrates the touch panel. |
 | 10 | LCD **CS** | |
-| 20 | SD **MISO** | UART0 RX: an input at boot, so the ROM boot log never drives it against the card. |
+| 20 | Touch **T_DO** and SD **MISO** | Shared SPI data in. UART0 RX: an input at boot, so the ROM boot log never drives it against either chip. |
 | 21 | LCD **RESET** | UART0 TX; the boot ROM log toggles it, which just resets the display before it is initialised. |
 
 Power:
@@ -238,16 +175,14 @@ Power:
 
 All pins are also in [`include/config.h`](include/config.h); change them there.
 
-This uses every GPIO, which is why the direct-CAN option below needs the
-other way of wiring the switch.
-
 ## SD card logging
 
-The display and SD card share one SPI bus (clock and MOSI), each with its own
-chip select. Only the card uses MISO. Some SD modules (the blue ones with a level
-shifter) keep driving MISO even when the card isn't selected, so they can't
-share MISO with another device that reads. That's fine here either way: the
-display never reads.
+The display, its touch controller and the SD card share one SPI bus, each
+with its own chip select. The touch controller and the card both read over
+MISO. Some SD modules (the blue ones with a level shifter) keep driving MISO
+even when the card isn't selected, which would garble touch readings; if taps
+land in the wrong place only while a card is in, that is why. Plain 3.3 V
+modules without a level shifter are fine.
 
 Files go into a numbered folder per power-up (there's no clock, so no dates).
 The folder is only created once something is written:
@@ -265,7 +200,7 @@ The folder is only created once something is written:
 | Record sniffer | off | Writes every frame to `sniff.log` while the sniffer screen is open. A red dot in the header shows it's recording. |
 | Record live data | off | Writes every PID reading to `live.csv` while live data is open. |
 | Save trouble code scans | on | Writes `scan_NN.txt` after every read, and shows the file name on screen. |
-| SD card | | Free space and the session folder; press to remount after swapping cards. |
+| SD card | | Free space and the session folder; tap to remount after swapping cards. |
 
 `events.log` is always written when a card is present. `sniff.log` loads
 directly into SavvyCAN, python-can or can-utils' `canplayer`.
@@ -285,42 +220,9 @@ Instead of a dongle, the C3's built-in CAN controller (TWAI) can sit on the
 bus itself through a transceiver. It's faster, and the sniffer sees every
 frame, but it means wiring into the OBD-II port.
 
-The transceiver needs GPIO 0 and 1 and the battery sense needs GPIO 3, which
-the switch uses in the default wiring. So this build moves the whole switch
-onto **one** pin through a resistor ladder, and is flashed from its own
-environment:
-
-```
-pio run -e c3_supermini_ladder -t upload
-```
-
-Then choose **Settings → Connection → Direct CAN transceiver** (or `link can`
-on the console). The default build refuses direct CAN, since its switch sits
-on the CAN pins.
-
-### 5-way switch on a resistor ladder
-
-```
- 3V3 ──[10k]──┬──────────────► GPIO4 (ADC)
-              │
-           COMMON  (switch pin A)
-              │
-              ├── PUSH  (C)         ─────────────── G        0 V
-              ├── UP    (mid-right) ──[1k]───────── G     0.30 V
-              ├── DOWN  (mid-left)  ──[3.3k]─────── G     0.82 V
-              ├── LEFT  (B)         ──[6.8k]─────── G     1.34 V
-              └── RIGHT (D)         ──[15k]──────── G     1.98 V
-                                       (released: 3.3 V)
-```
-
-The switch's common pin goes to the GPIO4 node, and each direction pin goes to
-ground through its own resistor; pressing a direction connects common to that
-pin. Identify the pins first, as in [The 5-way switch](#the-5-way-switch-bare-6-pins).
-Use 1% resistors. The voltages are calculated, not
-measured; hold each direction and type `nav` on the serial console to see the
-reading, then adjust `kNavLadderThresholdsMv` in `config.h` if a direction
-lands in the wrong band. A ladder can only report one direction at a time,
-which is all the UI needs.
+The transceiver uses GPIO 0 and 1 and the battery sense GPIO 3, all free in
+the touch build. Wire them as below, then choose **Settings → Connection →
+Direct CAN transceiver** (or `link can` on the console).
 
 ### Transceiver and power parts
 
@@ -328,15 +230,13 @@ which is all the UI needs.
 |---|---|
 | SN65HVD230 CAN transceiver module | Must be **3.3 V**. A 5 V TJA1050/MCP2551 module will not work from 3.3 V logic without level shifting. |
 | 12 V to 5 V buck converter | Mini-360, MP1584 or similar, set to 5.0 V **before** connecting the board. |
-| Resistors | 100k + 18k (battery sense), 10k (CAN TX pull-up), 10k + 1k + 3.3k + 6.8k + 15k (switch ladder) |
+| Resistors | 100k + 18k (battery sense), 10k (CAN TX pull-up) |
 | Diodes | SS14 / 1N5819 Schottky (buck output to 5V pin); SMBJ18A TVS recommended |
 | Fuse | 1 A, inline on OBD pin 16 |
 | OBD-II male plug / pigtail | Pins 4, 5, 6, 14 and 16 |
 
 | GPIO | Connects to |
 |---|---|
-| 4 | Switch ladder (above) |
-| 2 | Free |
 | 0 | Transceiver **CTX / TXD**, with a 10k pull-up to 3V3 so the bus stays recessive while the chip boots |
 | 1 | Transceiver **CRX / RXD** |
 | 3 | Battery divider midpoint (ADC1) |
@@ -420,9 +320,10 @@ platform as `esp32-recon` (Arduino core 3.x) and
    jumper path dropped it to 2.5 V (cards need 2.7 V or more) while the C3's
    3V3 pin still read 3.3 V. Shorten or solder the power and ground wires
    until the module reads about 3.3 V. Reformatting the card won't help.
-2. Switch: up/down move the menu highlight, push (or BOOT) opens, left (or
-   holding push) goes back. If a direction does the wrong thing, type `nav` on the
-   serial console while holding it to see which key the firmware thinks it is.
+2. Touch: the first power-up asks for calibration (tap each corner arrow).
+   Then tapping a menu item opens it and the header's left half (or BOOT)
+   goes back. If taps land in the wrong place, hold BOOT for 3 s to
+   recalibrate; `touch` on the serial console prints where each tap lands.
 3. Dongle in the car, ignition on. **Settings → Dongle WiFi network**: the
    dongle's network should be listed in cyan near the top. Pick it.
 4. **Vehicle info**: it should connect, show the ELM version, protocol and VIN.
@@ -448,13 +349,13 @@ console. (Untested with this firmware.)
 | `src/console.*` | USB serial console for text settings |
 | `src/storage.*` | SD card: session folders, buffered log streams, scan reports |
 | `src/display.*` | LovyanGFX ILI9341 setup |
-| `src/buttons.*` | 5-way switch (digital or ladder): debounce, hold-for-back, auto-repeat |
+| `src/input.*` | Touch panel (debounce, repeat, calibration in NVS) and the BOOT back button |
 | `src/vbat.*` | Battery voltage divider (direct-CAN build) |
 | `src/ui.*` | Screens and navigation |
 
 ## Roadmap
 
-- [ ] Bench test: display, 5-way switch (both wirings), SD card sharing the bus with the display
+- [ ] Bench test: touch panel and calibration, SD card and touch sharing MISO
 - [ ] Car test with an ELM327 WiFi dongle: connect, live data, trouble codes, VIN, sniffer
 - [ ] Car test in direct-CAN mode
 - [ ] K-line / J1850 cars through the ELM (protocols 1-5: different header format, no ISO-TP)

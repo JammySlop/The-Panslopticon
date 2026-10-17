@@ -3,8 +3,7 @@
 #include <Arduino.h>
 #include <string.h>
 
-#include "buttons.h"
-#include "config.h"
+#include "input.h"
 #include "link.h"
 #include "settings.h"
 #include "storage.h"
@@ -35,7 +34,8 @@ void help() {
     Serial.println("  host <ip>|auto       dongle address (auto = WiFi gateway)");
     Serial.println("  port <n>|auto        dongle TCP port");
     Serial.println("  link elm|can         ELM327 over WiFi, or direct CAN transceiver");
-    Serial.println("  nav                  which nav key is held (and the ladder voltage)");
+    Serial.println("  touch                print every tap (on/off), to check the calibration");
+    Serial.println("  touchcal             recalibrate the touch panel (or hold BOOT for 3 s)");
     Serial.println("  sd                   SD card status; \"sd mount\" retries after swapping cards");
 }
 
@@ -57,10 +57,6 @@ void handle(char* line) {
         strlcpy(s.elmHost, strcmp(arg, "auto") == 0 ? "" : arg, sizeof(s.elmHost));
     } else if (strcmp(line, "port") == 0 && *arg) {
         s.elmPort = strcmp(arg, "auto") == 0 ? 0 : static_cast<uint16_t>(atoi(arg));
-    } else if (strcmp(line, "link") == 0 && strcmp(arg, "can") == 0 && !config::kDirectCanAvailable) {
-        Serial.println("direct CAN needs the ladder nav wiring (kNavWiring in config.h): "
-                       "digital wiring uses the CAN pins");
-        return;
     } else if (strcmp(line, "link") == 0 && (strcmp(arg, "elm") == 0 || strcmp(arg, "can") == 0)) {
         s.link = arg[0] == 'e' ? settings::LinkKind::Elm327Wifi : settings::LinkKind::DirectCan;
         obdlink::select(s.link);
@@ -78,15 +74,16 @@ void handle(char* line) {
             } else {
                 Serial.println("SD: no card");
             }
-        } else if (strcmp(line, "nav") == 0) {
-            // Hold a direction and type "nav" to check the ladder thresholds.
-            Serial.printf("held: %s", buttons::heldKeyName());
-            if (config::kNavWiring == config::NavWiring::Ladder) {
-                Serial.printf("  ladder: %u mV", buttons::ladderMillivolts());
-            }
-            Serial.println();
+        } else if (strcmp(line, "touch") == 0) {
+            input::setEcho(!input::echo());
+            Serial.printf("touch echo %s\n", input::echo() ? "on: tap the screen" : "off");
+        } else if (strcmp(line, "touchcal") == 0) {
+            Serial.println("calibrating: tap the arrow tips on the screen");
+            ui::calibrateTouch();
+            ui::refresh();
+        } else if (line[0]) {
+            help();
         }
-        else if (line[0]) help();
     }
     if (!changed) return;
     settings::save();
