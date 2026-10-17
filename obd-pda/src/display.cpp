@@ -1,0 +1,93 @@
+#include "display.h"
+
+#include <driver/gpio.h>
+#include <esp_rom_gpio.h>
+#include <soc/gpio_sig_map.h>
+
+#include "config.h"
+
+Display lcd;
+
+bool InvertedDcBus::init() {
+    const bool ok = Bus_SPI::init();
+    if (config::kLcdDcInverted) {
+        invertDc();
+        // Bus_SPI::init() leaves DC driven high (data). Through the inverter
+        // the pad must now read low; LovyanGFX keeps the pad's input enabled.
+        dcInverted_ = gpio_get_level(static_cast<gpio_num_t>(config::kPinLcdDc)) == 0;
+    }
+    return ok;
+}
+
+void InvertedDcBus::beginTransaction() {
+    Bus_SPI::beginTransaction();
+    if (config::kLcdDcInverted) invertDc();
+}
+
+void InvertedDcBus::invertDc() {
+    // Plain GPIO output (not a peripheral signal), with the output inverted.
+    esp_rom_gpio_connect_out_signal(config::kPinLcdDc, SIG_GPIO_OUT_IDX, true, false);
+}
+
+bool Display::dcOk() const { return !config::kLcdDcInverted || bus_.dcInverted(); }
+
+Display::Display() {
+    {
+        auto cfg = bus_.config();
+        cfg.spi_host = SPI2_HOST;  // the C3's only general-purpose SPI
+        cfg.spi_mode = 0;
+        cfg.freq_write = config::kLcdSpiHz;
+        cfg.freq_read = 16000000;
+        cfg.spi_3wire = false;
+        cfg.use_lock = true;
+        cfg.dma_channel = SPI_DMA_CH_AUTO;
+        cfg.pin_sclk = config::kPinSpiSclk;
+        cfg.pin_mosi = config::kPinSpiMosi;
+        // The display never reads, but the SD card on the same bus does.
+        cfg.pin_miso = config::kPinSpiMiso;
+        cfg.pin_dc = config::kPinLcdDc;
+        bus_.config(cfg);
+        panel_.setBus(&bus_);
+    }
+    {
+        auto cfg = panel_.config();
+        cfg.pin_cs = config::kPinLcdCs;
+        cfg.pin_rst = config::kPinLcdRst;
+        cfg.pin_busy = -1;
+        cfg.panel_width = 240;
+        cfg.panel_height = 320;
+        cfg.memory_width = 240;
+        cfg.memory_height = 320;
+        cfg.offset_x = 0;
+        cfg.offset_y = 0;
+        cfg.offset_rotation = 0;
+        cfg.readable = false;
+        cfg.invert = config::kLcdInvert;
+        cfg.rgb_order = false;
+        cfg.dlen_16bit = false;
+        // Shared with the SD card: release the bus after every draw call.
+        cfg.bus_shared = true;
+        panel_.config(cfg);
+    }
+    {
+        auto cfg = touch_.config();
+        cfg.spi_host = SPI2_HOST;
+        cfg.bus_shared = true;
+        cfg.freq = config::kTouchSpiHz;
+        cfg.pin_sclk = config::kPinSpiSclk;
+        cfg.pin_mosi = config::kPinSpiMosi;
+        cfg.pin_miso = config::kPinSpiMiso;
+        cfg.pin_cs = config::kPinTouchCs;
+        cfg.pin_int = -1;  // T_IRQ unconnected: polled
+        // Rough raw ADC range of the panel; calibration replaces it.
+        cfg.x_min = 300;
+        cfg.x_max = 3900;
+        cfg.y_min = 300;
+        cfg.y_max = 3900;
+        cfg.offset_rotation = 0;
+        touch_.config(cfg);
+        panel_.setTouch(&touch_);
+    }
+    // No backlight control: LED is wired to 3V3.
+    setPanel(&panel_);
+}
